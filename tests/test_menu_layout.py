@@ -14,6 +14,8 @@ def test_modern_default_v1_has_compact_root_and_safety_actions():
         "ojingjing",
         "default.separator-profile",
         "chat",
+        "memory_card",
+        "diary",
         "look_screen",
         "screen_capture",
         "default.separator-interaction",
@@ -308,6 +310,8 @@ def test_missing_user_layout_resolves_versioned_default():
     registered = {
         "ojingjing",
         "chat",
+        "memory_card",
+        "diary",
         "look_screen",
         "screen_capture",
         "animations_hub",
@@ -371,6 +375,8 @@ def test_missing_user_layout_resolves_versioned_default():
     assert [node["id"] for node in result.nodes if node["type"] != "separator"] == [
         "ojingjing",
         "chat",
+        "memory_card",
+        "diary",
         "look_screen",
         "screen_capture",
         "animations_hub",
@@ -538,6 +544,8 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     expected_root = [
         "厉害了我的鲸",
         "AI 对话",
+        "查看记忆卡",
+        "嘟嘟的日记",
         "看看屏幕",
         "截图提问",
         "播放动画",
@@ -568,7 +576,7 @@ def test_default_layout_populates_real_qmenu_hierarchy(monkeypatch):
     rendered = ["|" if action.isSeparator() else action.text() for action in menu.actions()]
     expected_rendered = [
         "厉害了我的鲸", "|",
-        "AI 对话", "看看屏幕", "截图提问", "|",
+        "AI 对话", "查看记忆卡", "嘟嘟的日记", "看看屏幕", "截图提问", "|",
         "播放动画", "切换角色", "播放速率", "大小", "音乐", "|",
         "桌宠控制", "快捷启动", "|",
         "工具与帮助", "Agent 联动", "|",
@@ -711,7 +719,9 @@ def test_menu_editor_reorders_and_promotes_actions_with_button_controls():
     editor.move_down_action.trigger()
     reordered_ids = [node["id"] for node in editor.value()["nodes"]]
     chat_index = root_ids.index("chat")
-    assert reordered_ids[chat_index : chat_index + 2] == ["look_screen", "chat"]
+    # 「下移一位」与**紧随其后的那个节点**交换位置：新增菜单动作后这里不再写死
+    # look_screen，取模板里的下一个节点即可（顺序仍由默认布局断言钉住）。
+    assert reordered_ids[chat_index : chat_index + 2] == [root_ids[chat_index + 1], "chat"]
 
     promoted = editor.item_for_action("drag_physics")
     editor.tree.setCurrentItem(promoted)

@@ -90,6 +90,7 @@ ACTION_LABELS = {
     "check_update": "检查更新", "github_project": "GitHub 项目页",
     "quark_download": "夸克网盘下载", "agent_link": "Agent 联动",
     "proactive_screen": "主动识屏", "todo_panel": "待办提醒",
+    "memory_card": "查看记忆卡", "diary": "嘟嘟的日记",
     "quiet_mode": "免打扰",
     "weather": "查看天气", "weather_cities": "天气城市",
     "network_info": "网络信息",
@@ -120,6 +121,9 @@ ACTION_ICONS = {
     "deepseek_web": "web", "check_update": "update", "github_project": "web",
     "quark_download": "download", "agent_link": "automation",
     "proactive_screen": "screen", "todo_panel": "todo",
+    # 记忆卡/日记是她自己的东西，不是"系统工具"：图标借语义最接近的对话/待办，
+    # 不新增图标几何（新几何要画两套深浅色，收益只有一小格）。
+    "memory_card": "chat", "diary": "todo",
     "quiet_mode": "pause",
     "weather": "weather", "weather_cities": "weather",
     "network_info": "web",
@@ -207,6 +211,18 @@ def _build_settings(menu, pet):
 
 def _build_todo_panel(menu, pet):
     return add_action(menu, "待办提醒", "todo", pet.on_open_todo_panel, close_on_trigger=True)
+
+
+def _build_memory_card(menu, pet):
+    return add_action(
+        menu, "查看记忆卡", "chat", pet.on_open_memory_card, close_on_trigger=True
+    )
+
+
+def _build_diary(menu, pet):
+    return add_action(
+        menu, "嘟嘟的日记", "todo", pet.on_open_diary, close_on_trigger=True
+    )
 
 
 def _build_voice_chime_now(menu, pet):
@@ -381,6 +397,15 @@ class MenuActionRegistry:
             ),
             "todo_panel": MenuActionSpec(
                 _build_todo_panel, _callback_available("on_open_todo_panel")
+            ),
+            # 记忆卡与日记都读聊天数据（照片来自聊天附件、日记来自会话文件），
+            # 所以回调由 chat 能力提供；chat 模块停用时两者一起从菜单消失
+            # （features.py 的 chat.menu_action_ids 登记了这两个 id）。
+            "memory_card": MenuActionSpec(
+                _build_memory_card, _callback_available("on_open_memory_card")
+            ),
+            "diary": MenuActionSpec(
+                _build_diary, _callback_available("on_open_diary")
             ),
             "voice_chime_now": MenuActionSpec(
                 _build_voice_chime_now, _callback_available("on_voice_chime_now")

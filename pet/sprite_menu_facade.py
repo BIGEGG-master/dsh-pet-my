@@ -429,6 +429,20 @@ class SpriteMenuFacade:
         return _first_callable(self._hosts(), ("open_todo_panel",))
 
     @property
+    def on_open_memory_card(self):
+        """「查看记忆卡」：``AppShell.open_memory_card``（进程级弹窗）。
+
+        与 on_network_info 同理必须在 facade 上存在：注册表按 ``callable`` 判
+        可用性，缺了这个属性 overlay 菜单会静默少一项。
+        """
+        return _first_callable(self._hosts(), ("open_memory_card",))
+
+    @property
+    def on_open_diary(self):
+        """「嘟嘟的日记」：``AppShell.open_diary``（进程级弹窗，同上）。"""
+        return _first_callable(self._hosts(), ("open_diary",))
+
+    @property
     def on_network_info(self):
         """「网络信息」：``AppShell.open_network_info``（进程级弹窗，与窗口版同一方法）。
 

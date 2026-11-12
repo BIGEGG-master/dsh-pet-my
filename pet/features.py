@@ -326,7 +326,7 @@ FEATURES: dict[str, FeatureSpec] = {
         search_aliases=("对话", "AI", "聊天", "模型", "API", "chat", "llm"),
         requires=(),
         optional_deps=(),
-        menu_action_ids=("chat",),
+        menu_action_ids=("chat", "memory_card", "diary"),
         config_keys=(
             "chat",
             "chat_background",

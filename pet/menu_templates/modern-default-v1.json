@@ -5,6 +5,8 @@
     {"type": "action", "id": "ojingjing", "visible": true, "section": "profile"},
     {"type": "separator", "id": "default.separator-profile", "visible": true},
     {"type": "action", "id": "chat", "visible": true, "section": "interaction"},
+    {"type": "action", "id": "memory_card", "visible": true, "section": "interaction"},
+    {"type": "action", "id": "diary", "visible": true, "section": "interaction"},
     {"type": "action", "id": "look_screen", "visible": true, "section": "interaction"},
     {"type": "action", "id": "screen_capture", "visible": true, "section": "interaction"},
     {"type": "separator", "id": "default.separator-interaction", "visible": true},

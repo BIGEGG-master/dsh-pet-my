@@ -396,6 +396,9 @@ class PetWindow(QWidget, WindowFeatureGateMixin):
         self.on_look_synced = None
         self.on_look_screen = None
         self.on_open_modern_settings = None
+        # 记忆卡 / 日记：读聊天数据的两个窗口（chat 不可用时 app 不注入，菜单随之消失）
+        self.on_open_memory_card = None
+        self.on_open_diary = None
         self.on_restore_fun_windows = None
         self.on_spawn_pet = None
         self.on_clear_spawned_pets = None

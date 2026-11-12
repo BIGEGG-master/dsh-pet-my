@@ -632,6 +632,12 @@ class PetInstance:
         win.on_settings_reset = self._slot_wrap(
             lambda: self.shell.apply_settings_reset(self))
         win.on_open_todo_panel = self._slot_wrap(self.shell.open_todo_panel)
+        # 记忆卡 / 日记：读的都是聊天数据（附件照片、会话文件），chat 不可用时
+        # 不注入回调——注册表的可用性判定直接让两项从菜单消失。
+        win.on_open_memory_card = (
+            self._slot_wrap(self.shell.open_memory_card) if self.enable_chat else None)
+        win.on_open_diary = (
+            self._slot_wrap(self.shell.open_diary) if self.enable_chat else None)
         # 网络信息（issue #172）：右键菜单入口 → 进程级弹窗（overlay 侧由
         # SpriteMenuFacade.on_network_info 走同一方法）。
         win.on_network_info = self._slot_wrap(self.shell.open_network_info)
@@ -1387,6 +1393,10 @@ class AppShell:
         # 网络信息弹窗（issue #172）：进程级单例、非模态。数据只在打开时取一次
         # （后台线程），故不需要常驻服务；窗口销毁即置空。
         self.network_info_dialog = None
+        # 记忆卡 / 日记（4.5.0）：同样是进程级非模态单例，不开窗就没有对象——
+        # 两者都不常驻定时器，数据在打开时现算。
+        self.memory_card_dialog = None
+        self.diary_dialog = None
         if self._todo_wanted():
             self._ensure_todo_service()
         # 语音报时：进程级单例（多窗共用调度器）。默认关闭（2026-09-19 起，
@@ -4856,6 +4866,63 @@ class AppShell:
 
     def _todo_panel_finished(self, _result: int) -> None:
         self.todo_panel = None
+
+    def open_memory_card(self) -> None:
+        """打开记忆卡面板（非模态单例；照片副本与备注都在配置目录里）。
+
+        闸放在 ``chat`` 模块上而不是 ``todo``：记忆卡的照片来自聊天附件、备注
+        来自她的回复，chat 停用时这张面板没有数据可看（菜单也一起消失）。
+        """
+        if not feature_activation_mod.is_active("chat"):
+            logging.info("chat 模块未激活，忽略「查看记忆卡」请求")
+            return
+        from .memory_card_dialog import MemoryCardDialog
+
+        dialog = getattr(self, "memory_card_dialog", None)
+        if dialog is None:
+            parent = self.win
+            dialog = MemoryCardDialog(
+                self.config.dir, parent if isinstance(parent, QWidget) else None)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._memory_card_finished)
+            self.memory_card_dialog = dialog
+        else:
+            # 重开一次：后台可能刚存了新照片（关闭即销毁的窗口不存在这条路径）
+            dialog.reload()
+        inst = self.instance
+        if inst is not None:
+            inst._present_dialog(dialog)
+        else:
+            dialog.show()
+
+    def _memory_card_finished(self, _result: int) -> None:
+        self.memory_card_dialog = None
+
+    def open_diary(self) -> None:
+        """打开日记窗（非模态单例；内容从会话文件现算，不落盘第二份）。"""
+        if not feature_activation_mod.is_active("chat"):
+            logging.info("chat 模块未激活，忽略「嘟嘟的日记」请求")
+            return
+        from .diary_dialog import DiaryDialog
+
+        dialog = getattr(self, "diary_dialog", None)
+        if dialog is None:
+            parent = self.win
+            dialog = DiaryDialog(
+                self.config.dir, parent if isinstance(parent, QWidget) else None)
+            dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dialog.finished.connect(self._diary_finished)
+            self.diary_dialog = dialog
+        else:
+            dialog.reload()
+        inst = self.instance
+        if inst is not None:
+            inst._present_dialog(dialog)
+        else:
+            dialog.show()
+
+    def _diary_finished(self, _result: int) -> None:
+        self.diary_dialog = None
 
     def open_network_info(self) -> None:
         """打开「网络信息」弹窗（非模态单例；数据只在打开时取一次，不轮询）。"""
