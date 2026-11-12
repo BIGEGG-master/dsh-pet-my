@@ -3,7 +3,8 @@
 > **⚠️ 这是 [dsh-pet-indesktop](https://github.com/MerZlin/dsh-pet-indesktop) 的修改版（fork），不是原创项目。**
 >
 > - 上游基线：**4.4.0**（MIT License, Copyright (c) 2026 Merzlin，见 [LICENSE](LICENSE)）
-> - 本仓库版本：**4.4.1**，改动是「DSH 联动四项原生能力 + 可迭代开发脚本」
+> - 本仓库版本：**4.4.2**，改动是「DSH 联动四项原生能力 + 可迭代开发脚本」，
+>   4.4.2 新增内置角色卡「嘟嘟」（`pet/persona_cards/builtin/dudu.json`）
 > - 完整改动清单、上游归属与再分发要求见 **[NOTICE.md](NOTICE.md)**
 > - 本仓库不代表上游作者的背书，也不是上游官方发布
 

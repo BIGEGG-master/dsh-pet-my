@@ -29,6 +29,32 @@ def test_builtin_cards_include_feiyu():
     assert card.aliases.get("shenshen") == "小肥鱼"
 
 
+def test_builtin_cards_include_dudu():
+    """嘟嘟角色卡：内置「小肥鱼」之外的第二个身份，素材仍复用同一只桌宠。"""
+    ids = [card.id for card in builtin_cards()]
+    assert "dudu" in ids
+    card = find_card("dudu")
+    assert card is not None
+    assert card.name == "嘟嘟"
+    assert card.system_prompt.startswith("你是「嘟嘟」")
+    assert card.aliases.get("shenshen") == "嘟嘟"
+    # 与内置卡同口径：30 组台词（每组不超过 8 条、单条不超过 120 字）。
+    assert len(card.phrases) == 30
+    assert card.phrase_count >= 80
+    # 口吻红线：一句里最多一个「嘟」。
+    for key, texts in card.phrases.items():
+        for text in texts:
+            assert text.count("嘟") <= 1, f"{key}: {text}"
+
+
+def test_dudu_card_covers_every_preset_phrase_key():
+    """事件台词覆盖面：嘟嘟卡必须覆盖内置「小肥鱼」的每一个事件键。"""
+    feiyu = find_card("feiyu")
+    dudu = find_card("dudu")
+    assert feiyu is not None and dudu is not None
+    assert set(dudu.phrases) == set(feiyu.phrases)
+
+
 def test_apply_card_writes_identity_only():
     card = find_card("feiyu")
     config = {

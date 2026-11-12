@@ -14,6 +14,8 @@
 ## 文件
 
 - `feiyu.persona-card.json` —— 角色卡源（人设、口头禅、台词）
+- `dudu.persona-card.json` —— 嘟嘟角色卡（`pet/persona_cards/builtin/dudu.json` 的同一份，
+  可直接在设置 → AI → 角色卡里导入；素材仍复用同一只桌宠）
 - `apply_persona.py` —— 应用 / 回滚 / 打印模板
 - `feiyu.persona-phrases.json` —— 生成物，标准 `persona-phrases/v1`，可在设置页「导入模板」复用
 - `backups/` —— 每次应用前的 config 快照
