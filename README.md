@@ -1,5 +1,12 @@
 # dsh-pet-indesktop
 
+> **⚠️ 这是 [dsh-pet-indesktop](https://github.com/MerZlin/dsh-pet-indesktop) 的修改版（fork），不是原创项目。**
+>
+> - 上游基线：**4.4.0**（MIT License, Copyright (c) 2026 Merzlin，见 [LICENSE](LICENSE)）
+> - 本仓库版本：**4.4.1**，改动是「DSH 联动四项原生能力 + 可迭代开发脚本」
+> - 完整改动清单、上游归属与再分发要求见 **[NOTICE.md](NOTICE.md)**
+> - 本仓库不代表上游作者的背书，也不是上游官方发布
+
 <p align="center">
   <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="版本" src="https://img.shields.io/github/v/release/MerZlin/dsh-pet-indesktop?label=%E7%89%88%E6%9C%AC&color=blue"></a>
   <a href="https://github.com/MerZlin/dsh-pet-indesktop/releases"><img alt="总下载" src="https://img.shields.io/github/downloads/MerZlin/dsh-pet-indesktop/total?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
