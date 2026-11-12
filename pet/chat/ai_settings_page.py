@@ -274,9 +274,13 @@ class _AiSettingsPage(QWidget):
             SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
             SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
             SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
+            SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
+        ], self))
+        # 人设与角色卡放同一块：两条入口写同一个字段，分开放才让人以为"冲突"。
+        root.addWidget(SettingsSection("人设与角色卡", [
             SettingRow("system_prompt", "System Prompt",
                        "定义桌宠对话时的身份、语气和行为。这里写的是**主体人设**："
-                       "应用角色卡会把卡的人设写进来；你手写的部分建议放到下面的"
+                       "应用角色卡会把卡的人设写到这里；你自己的要求和建议放到下面的"
                        "「补充说明」，两者会叠在一起生效。",
                        self.prompt, stacked=True),
             SettingRow("prompt_supplement", "补充说明（追加在人设之后）",
@@ -286,7 +290,33 @@ class _AiSettingsPage(QWidget):
             SettingRow("prompt_merge", "角色卡 + 补充同时生效",
                        "开：主体人设与补充说明叠加。关：只用主体人设（补充仍然保存，"
                        "以后可以再打开）。", self.prompt_merge),
-            SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
+            SettingRow(
+                "persona_card", "角色卡",
+                "一份卡就是一个角色的完整身份：人设（System Prompt）、显示名、"
+                "以及全部事件台词。可以导入 JSON（persona-card/v1，带台词）"
+                "或 Markdown / TXT（只写人设，正文即 System Prompt）。"
+                "应用卡只换主体，上面写的补充说明会保留。",
+                self.persona_card_combo,
+            ),
+            SettingRow(
+                "persona_card_apply", "应用这张卡",
+                "把选中卡的人设写进 System Prompt、把角色显示名改成卡里的名字、"
+                "并整组替换事件台词（台词模式切到「自定义」）。只动这三处，"
+                "不碰模型、API Key、语音与记忆设置。Markdown 卡没有台词，"
+                "应用时不会动现有台词。",
+                self.persona_card_apply_btn,
+            ),
+            SettingRow(
+                "persona_card_import", "从文件导入",
+                "读 JSON（persona-card/v1）或 Markdown / TXT（# 标题当名字、正文当人设），"
+                "统一存到本机角色卡目录；同 id 会覆盖旧卡。",
+                self.persona_card_import_btn,
+            ),
+            SettingRow(
+                "persona_card_export", "导出当前卡",
+                "把选中的卡导出成 JSON，方便备份或分享。",
+                self.persona_card_export_btn,
+            ),
         ], self))
         root.addWidget(SettingsSection("场景扮演", [
             SettingRow(
@@ -373,35 +403,6 @@ class _AiSettingsPage(QWidget):
                 "按角色保存在本地（最多 100 条 / 4000 字），按四层分组；可单条改层、"
                 "删除、恢复已归档的话题，或一键清空全部四层。",
                 self.chat_memory_manage_btn,
-            ),
-        ], self))
-        root.addWidget(SettingsSection("角色卡", [
-            SettingRow(
-                "persona_card", "角色卡",
-                "一份卡就是一个角色的完整身份：人设（System Prompt）、显示名、"
-                "以及全部事件台词。可以导入 JSON（persona-card/v1，带台词）"
-                "或 Markdown / TXT（只写人设，正文即 System Prompt）。"
-                "注意：人设与上面的 System Prompt 是同一个字段，应用卡会覆盖它。",
-                self.persona_card_combo,
-            ),
-            SettingRow(
-                "persona_card_apply", "应用这张卡",
-                "把选中卡的人设写进 System Prompt、把角色显示名改成卡里的名字、"
-                "并整组替换事件台词（台词模式切到「自定义」）。只动这三处，"
-                "不碰模型、API Key、语音与记忆设置。Markdown 卡没有台词，"
-                "应用时不会动现有台词。",
-                self.persona_card_apply_btn,
-            ),
-            SettingRow(
-                "persona_card_import", "从文件导入",
-                "读 JSON（persona-card/v1）或 Markdown / TXT（# 标题当名字、正文当人设），"
-                "统一存到本机角色卡目录；同 id 会覆盖旧卡。",
-                self.persona_card_import_btn,
-            ),
-            SettingRow(
-                "persona_card_export", "导出当前卡",
-                "把选中的卡导出成 JSON，方便备份或分享。",
-                self.persona_card_export_btn,
             ),
         ], self))
         vision_rows = [
