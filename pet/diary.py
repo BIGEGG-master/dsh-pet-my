@@ -17,9 +17,9 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 log = logging.getLogger(__name__)
 

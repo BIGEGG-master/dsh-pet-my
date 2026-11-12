@@ -1132,8 +1132,8 @@ class ChatWindow(QDialog):
         self._active_request_id: str | None = None
         self._last_user_text = ""
         self._last_user_payload: list[dict] | None = None
-        # 本轮发出去的图片记忆卡（回复完成后由她补写备注，见 photo_note）
-        self._pending_photo_cards: list[dict] = []
+        # 本轮发出去的图片：先暂存，回复后由她判断要不要记（见 photo_memory）
+        self._pending_photos: list[dict] = []
         self._pending_output = ""
         self._pending_finish_text: str | None = None
         self._stream_follow_output = True
@@ -2242,9 +2242,9 @@ class ChatWindow(QDialog):
         request_text = text or "请分析这些附件。"
         if attachment_context:
             request_text += "\n\n" + attachment_context
-        # 发图即入记忆卡：清空附件之前先把图片复制进配置目录（粘贴的临时图
-        # 发送后就会被删）。备注先放他说的话，回复完成后再由她改写。
-        self._remember_photo_cards(text)
+        # 发图先暂存：清空附件之前把图片复制进配置目录（粘贴的临时图发送后
+        # 就会被删）。要不要记、记多重要由她回复后自己判断，见 photo_memory。
+        self._stage_photos(text)
         self.input.clear()
         self.composer.clear_attachments()
         # 陈旧快照防护（DS-M7 → R3 P1 硬修）：原子「读-追加-提交」，
@@ -2268,12 +2268,13 @@ class ChatWindow(QDialog):
         """当前角色的对话全局记忆（与会话文件同目录；按需构造——实例很轻，锁按路径共享）。"""
         return ChatMemory(self.store.root / self.character_id / "memory.json")
 
-    def _remember_photo_cards(self, text: str) -> None:
-        """把本轮发出的图片存成记忆卡（备注先放用户的原话）。
+    def _stage_photos(self, text: str) -> None:
+        """把本轮发出的图片先暂存到 ``memory-cards/pending/``。
 
-        失败只在日志里：记忆卡是锦上添花，绝不影响这一轮消息发送。
+        只是"留一份底"：她判断前图不能丢（系统临时目录里的粘贴图会被清理），
+        但也不代表已经记住——判完由 ``photo_memory`` 决定转正或删除。
         """
-        self._pending_photo_cards = []
+        self._pending_photos = []
         try:
             from .. import memory_card as cards_mod
 
@@ -2286,40 +2287,52 @@ class ChatWindow(QDialog):
                         continue
                 except OSError:
                     continue
-                card = cards_mod.add_photo(
-                    config_dir,
-                    path,
-                    note=str(text or "")[: cards_mod.MAX_NOTE_CHARS],
-                    text=str(text or ""),
-                    source="chat",
-                )
-                if card is not None:
-                    self._pending_photo_cards.append(card)
+                staged = cards_mod.stage_photo(config_dir, self.character_id, path)
+                if staged is not None:
+                    self._pending_photos.append(staged)
         except Exception:
-            log.debug("照片记忆卡落盘失败（已忽略）", exc_info=True)
+            log.debug("照片暂存失败（已忽略）", exc_info=True)
 
-    def _flush_photo_notes(self, reply_text: str) -> None:
-        """回复完成：让后台用她的口吻给本轮图片写一句备注（静默，可失败）。"""
-        cards = self._pending_photo_cards
-        self._pending_photo_cards = []
-        if not cards:
+    def _discard_pending_photos(self) -> None:
+        """这一轮没跑成：把暂存图删掉（她没机会判断，就别占着磁盘）。"""
+        staged = self._pending_photos
+        self._pending_photos = []
+        if not staged:
             return
         try:
-            from .photo_note import schedule_photo_note
+            from .. import memory_card as cards_mod
 
             config_dir = getattr(self.config, "dir", None)
             if config_dir is None:
                 return
-            schedule_photo_note(
+            for item in staged:
+                cards_mod.discard_staged(config_dir, self.character_id, item)
+        except Exception:
+            log.debug("暂存照片清理失败（已忽略）", exc_info=True)
+
+    def _flush_photo_memory(self, reply_text: str) -> None:
+        """回复完成：让她判断这些图该不该记、多重要、备注写什么（静默）。"""
+        staged = self._pending_photos
+        self._pending_photos = []
+        if not staged:
+            return
+        try:
+            from .photo_memory import schedule_photo_memory
+
+            config_dir = getattr(self.config, "dir", None)
+            if config_dir is None:
+                return
+            schedule_photo_memory(
                 config_dir=config_dir,
-                cards=cards,
+                character_id=self.character_id,
+                staged=staged,
                 user_text=self._last_user_text,
                 reply_text=reply_text,
                 provider=self.service.provider,
                 provider_config=self.settings.active_config,
             )
         except Exception:
-            log.debug("照片备注调度失败（已忽略）", exc_info=True)
+            log.debug("照片记忆调度失败（已忽略）", exc_info=True)
 
     def _schedule_memory_extract(self, user_text: str, reply_text: str, provider, provider_config) -> None:
         """档 B：回复完成后的静默记忆提炼（护栏/后台线程都在 memory_extract 内）。"""
@@ -2585,7 +2598,7 @@ class ChatWindow(QDialog):
         self.pet_link.success()
         self._show_system_notice("对话完成", "AI 已回复完成，点击查看。")
         # 图片记忆卡：用这一轮的回复让她补一句自己的备注（后台，失败保留原备注）
-        self._flush_photo_notes(text)
+        self._flush_photo_memory(text)
         if self._stream_follow_output:
             self._bottom()
 
@@ -2609,8 +2622,8 @@ class ChatWindow(QDialog):
             )
         else:
             self._show_system_notice("生成失败", f"对话生成失败：{str(text)[:100]}")
-        # 这一轮没跑成：待补备注的图片不再挂到下一轮（否则下一轮成功会写错备注）
-        self._pending_photo_cards = []
+        # 这一轮没跑成：待判断的图片不再挂到下一轮（否则下一轮成功会拿错图）
+        self._discard_pending_photos()
         self._bottom()
 
     def _stopped(self, request_id: str) -> None:
@@ -2626,7 +2639,7 @@ class ChatWindow(QDialog):
                 self._bubble.set_state("stopped")
             else:
                 self._remove_bubble(self._bubble)
-        self._pending_photo_cards = []
+        self._discard_pending_photos()
         self._reset()
 
     def _reset(self) -> None:

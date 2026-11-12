@@ -224,6 +224,7 @@ def _clean_keyword_list(value: Any) -> list[str]:
     return cleaned
 
 
+
 def _keyword_jaccard(left: str, right: str) -> float:
     """两条文本的关键词 Jaccard（与 ``extract_keywords`` 同一口径）。"""
     left_keywords = set(extract_keywords(left))
@@ -571,6 +572,9 @@ class ChatMemory:
         self._lock = _lock_for(self.path)
         self._io_lock = _io_lock_for(self.path)
         self._lock_file = lock_path_for(self.path)
+        #: 上一次 ``apply_ops`` 的实际变更（``[{"op", "entry"}]``），供记忆卡同步读。
+        #: 不参与落盘：这是一次调用的返回值通道，不是第二份存储。
+        self.last_changes: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------ 读
     def _retry_with_narrow_lock(self, step: Callable[[], Any], *, attempts: int) -> Any:
@@ -799,6 +803,7 @@ class ChatMemory:
             normalized.append((op, text, explicit_layer, keywords))
         if not normalized:
             return False
+        self.last_changes = []
         with self._lock:
             qlock = QLockFile(str(self._lock_file))
             if not self._try_file_lock(qlock):
@@ -811,6 +816,7 @@ class ChatMemory:
                 moment = self._clock()
                 now = moment.isoformat()
                 added: list[dict[str, Any]] = []
+                before = {str(e.get("id")): dict(e) for e in entries if e.get("id")}
                 manual = str(source or "").strip().lower() == "manual"
                 changed = False
                 for op, text, explicit_layer, keywords in normalized:
@@ -820,6 +826,9 @@ class ChatMemory:
                             entries.remove(found)
                             if found in added:
                                 added.remove(found)
+                            self.last_changes.append(
+                                {"op": "FORGET", "entry": dict(found)}
+                            )
                             changed = True
                         continue
                     # ADD / UPDATE 未命中按 ADD；UPDATE 命中 = 重申
@@ -830,6 +839,10 @@ class ChatMemory:
                         # 显式归档与 is_archived 的隐式口径必须同源（M3）。
                         if not manual and is_archived(found, moment):
                             found["hits"] = int(found.get("hits", 0) or 0) + 1
+                            # 卡片的语义没变（同一句话还在），只是计数 +1。
+                            self.last_changes.append(
+                                {"op": "TOUCH", "entry": dict(found)}
+                            )
                             changed = True
                             continue
                         found["hits"] = int(found.get("hits", 0) or 0) + 1
@@ -857,6 +870,7 @@ class ChatMemory:
                             found["last_hit_at"] = now
                         entries.remove(found)
                         entries.insert(0, found)
+                        self.last_changes.append({"op": "UPDATE", "entry": dict(found)})
                         changed = True
                         continue
                     # v2f N3：自动新增前先查已归档条目的同义改写；命中则丢弃。
@@ -877,12 +891,48 @@ class ChatMemory:
                         entry["last_hit_at"] = now
                     entries.insert(0, entry)
                     added.append(entry)
+                    self.last_changes.append({"op": "ADD", "entry": dict(entry)})
                     changed = True
                 # v2f L4：空操作（FORGET 未命中 / 全部被归档去重丢弃）不写盘。
                 if not changed:
+                    self.last_changes = []
                     return False
                 self._enforce_limits(entries, protected=tuple(added))
+                # 限额淘汰也是删除：卡片侧要跟着消失（否则记忆卡会长出孤儿）。
+                alive = {str(e.get("id")) for e in entries if e.get("id")}
+                for entry_id, snapshot in before.items():
+                    if entry_id not in alive:
+                        self.last_changes.append({"op": "FORGET", "entry": snapshot})
                 return self._write(entries)
+            finally:
+                qlock.unlock()
+
+    def set_photo(self, entry_id: str, filename: str) -> bool:
+        """给条目挂一张照片（文件名，落在 ``memory-photos/`` 旁边）。
+
+        照片是**记忆条目的一部分**，不是另一套卡片的指针：条目被删，图跟着删。
+        """
+        key = str(entry_id or "").strip()
+        photo = str(filename or "").strip()
+        if not key:
+            return False
+        with self._lock:
+            qlock = QLockFile(str(self._lock_file))
+            if not self._try_file_lock(qlock):
+                return False
+            try:
+                entries = self._read_entries_strict()
+                if entries is None:
+                    return False
+                for entry in entries:
+                    if str(entry.get("id") or "") != key:
+                        continue
+                    if photo:
+                        entry["photo"] = photo
+                    else:
+                        entry.pop("photo", None)
+                    return self._write(entries)
+                return False
             finally:
                 qlock.unlock()
 

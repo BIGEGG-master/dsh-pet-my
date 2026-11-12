@@ -1,14 +1,16 @@
 # -*- coding: utf-8 -*-
-"""记忆卡面板 / 日记窗 / 照片备注：UI 行为与后台备注写入（不联网、不打真窗口）。"""
+"""记忆卡面板 / 日记窗 / 照片记忆：UI 行为与她自己的记忆判断（不联网、不打真窗口）。"""
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from pet import memory_card as cards_mod
+from pet.chat.memory import ChatMemory
 
 
 def _app():
@@ -22,6 +24,16 @@ def _png(path):
     return path
 
 
+def _memory(tmp_path, character="shenshen"):
+    return ChatMemory(tmp_path / "sessions" / character / "memory.json")
+
+
+def _seed(tmp_path, text="哥哥喜欢鲸鱼", layer="fact"):
+    memory = _memory(tmp_path)
+    assert memory.apply_ops([{"op": "ADD", "text": text, "layer": layer}], source="manual")
+    return memory.last_changes[0]["entry"]
+
+
 # ---------------------------------------------------------------- 记忆卡面板
 
 
@@ -30,36 +42,31 @@ def test_memory_card_dialog_lists_searches_and_filters(tmp_path):
     from pet.memory_card_dialog import MemoryCardDialog
 
     dialog = MemoryCardDialog(tmp_path)
-    assert dialog.item_count == 0  # 空目录：列表空、空状态可见
+    assert dialog.item_count == 0  # 没有记忆：空状态可见
 
-    cards_mod.add_text(tmp_path, "哥哥喜欢鲸鱼", note="哥哥说的")
-    cards_mod.add_photo(tmp_path, _png(tmp_path / "w.png"), note="哥哥画的鲸鱼")
+    _seed(tmp_path, "哥哥喜欢鲸鱼", layer="fact")
+    _seed(tmp_path, "别在晚上提工作", layer="lesson")
     dialog.reload()
     assert dialog.item_count == 2
 
     dialog._search.setText("鲸鱼")
-    assert dialog.item_count == 2
-    dialog._kind.setCurrentIndex(1)  # 只看文字
     assert dialog.item_count == 1
-    dialog._search.setText("不存在的词")
-    assert dialog.item_count == 0
-    dialog._kind.setCurrentIndex(0)
     dialog._search.clear()
+    dialog._layer.setCurrentIndex(3)  # 教训
+    assert dialog.item_count == 1
+    dialog._layer.setCurrentIndex(0)
     assert dialog.item_count == 2
     dialog.deleteLater()
     _app().processEvents()
 
 
-def test_memory_card_detail_saves_note_and_deletes(tmp_path, monkeypatch):
+def test_memory_card_detail_deletes_through_memory(tmp_path, monkeypatch):
     _app()
     from pet.memory_card_dialog import CardDetailDialog
 
-    card = cards_mod.add_text(tmp_path, "正文", note="旧备注")
-    assert card is not None
-    dialog = CardDetailDialog(tmp_path, card)
-    dialog._note_edit.setText("新备注")
-    dialog._save_note()
-    assert cards_mod.load_cards(tmp_path)[0]["note"] == "新备注"
+    _seed(tmp_path, "这条要删掉")
+    item = cards_mod.iter_items(tmp_path)[0]
+    dialog = CardDetailDialog(tmp_path, item)
 
     # conftest 把 QMessageBox.question 默认成 No（安全拒绝），这里显式放行一次
     from PySide6.QtWidgets import QMessageBox
@@ -69,7 +76,8 @@ def test_memory_card_detail_saves_note_and_deletes(tmp_path, monkeypatch):
         staticmethod(lambda *a, **k: QMessageBox.StandardButton.Yes),
     )
     dialog._delete()
-    assert cards_mod.load_cards(tmp_path) == []
+    assert _memory(tmp_path).load() == []
+    assert cards_mod.iter_items(tmp_path) == []
     dialog.deleteLater()
     _app().processEvents()
 
@@ -140,7 +148,7 @@ def test_diary_dialog_handles_no_sessions(tmp_path):
     _app().processEvents()
 
 
-# ---------------------------------------------------------------- 照片备注（她写的那一句）
+# ---------------------------------------------------------------- 照片记忆（她判断该不该记）
 
 
 class _FakeProvider:
@@ -155,69 +163,97 @@ def _fake_config():
     return SimpleNamespace(model="m", thinking="auto", reasoning_effort="high")
 
 
-def test_clean_note_strips_quotes_and_truncates():
-    from pet.chat.photo_note import _clean_note
+def test_parse_verdict_accepts_json_and_string_flags():
+    from pet.chat.photo_memory import parse_verdict
 
-    assert _clean_note("「哥哥画的鲸鱼」。") == "哥哥画的鲸鱼"
-    assert _clean_note('"哥哥的晚饭"') == "哥哥的晚饭"
-    assert _clean_note("多" * 40) == "多" * 16
-    assert _clean_note("   ") == ""
-
-
-def test_photo_note_run_updates_card_note(tmp_path):
-    from pet.chat import photo_note
-
-    card = cards_mod.add_photo(tmp_path, _png(tmp_path / "x.png"), note="这是他画的", text="画好了")
-    assert card is not None
-    photo_note._run(tmp_path, [card], "画好了", "好可爱嘟", _FakeProvider("「哥哥画的鲸鱼」"), _fake_config())
-    assert cards_mod.load_cards(tmp_path)[0]["note"] == "哥哥画的鲸鱼"
+    verdict = parse_verdict('{"keep": true, "note": "「哥哥画的鲸鱼」"}')
+    assert verdict == {"keep": True, "note": "哥哥画的鲸鱼"}
+    assert parse_verdict('{"keep": "false", "note": "随手截图"}')["keep"] is False
+    assert parse_verdict('```json\n{"keep": true, "note": "哥哥的晚饭"}\n```')["note"] == "哥哥的晚饭"
+    assert parse_verdict("完全不是 JSON") is None
 
 
-def test_photo_note_run_keeps_original_note_on_failure(tmp_path):
-    from pet.chat import photo_note
+def test_photo_memory_keep_writes_one_memory_with_photo(tmp_path):
+    from pet.chat import photo_memory
+
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "x.png"))
+    assert staged is not None and Path(staged["path"]).is_file()
+    photo_memory._run(
+        tmp_path, "shenshen", [staged], "画好了", "好可爱嘟",
+        _FakeProvider('{"keep": true, "note": "哥哥画的鲸鱼"}'), _fake_config(),
+    )
+    entries = _memory(tmp_path).load()
+    assert len(entries) == 1
+    assert entries[0]["text"] == "哥哥画的鲸鱼"
+    assert entries[0]["layer"] == "topic"
+    assert entries[0]["source"] == "auto"
+    assert entries[0]["photo"]
+    assert not Path(staged["path"]).exists(), "转正后暂存副本要清掉"
+
+    item = cards_mod.iter_items(tmp_path)[0]
+    assert item.photo is not None and item.photo.is_file()
+
+
+def test_photo_memory_discards_when_she_says_no(tmp_path):
+    from pet.chat import photo_memory
+
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "y.png"))
+    assert staged is not None
+    photo_memory._run(
+        tmp_path, "shenshen", [staged], "截图", "嗯",
+        _FakeProvider('{"keep": false, "note": "随手截图"}'), _fake_config(),
+    )
+    assert _memory(tmp_path).load() == []
+    assert cards_mod.iter_items(tmp_path) == []
+    assert not Path(staged["path"]).exists()
+
+
+def test_photo_memory_failure_keeps_memory_with_fallback_note(tmp_path):
+    from pet.chat import photo_memory
 
     class _Boom:
         def stream(self, messages, config, cancel):
             raise RuntimeError("network down")
 
-    card = cards_mod.add_photo(tmp_path, _png(tmp_path / "y.png"), note="原备注")
-    assert card is not None
-    photo_note._run(tmp_path, [card], "hi", "hi", _Boom(), _fake_config())
-    assert cards_mod.load_cards(tmp_path)[0]["note"] == "原备注"
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "z.png"))
+    assert staged is not None
+    photo_memory._run(tmp_path, "shenshen", [staged], "这是我画的鲸鱼", "好看嘟", _Boom(), _fake_config())
+    entries = _memory(tmp_path).load()
+    assert len(entries) == 1
+    assert entries[0]["text"] == "这是我画的鲸鱼"
+    assert entries[0]["photo"]
 
 
-def test_schedule_photo_note_guards(tmp_path, monkeypatch):
-    from pet.chat import photo_note
+def test_schedule_photo_memory_guards(tmp_path):
     from pet import feature_activation as fa
+    from pet.chat import photo_memory
 
-    photo_note.reset_for_tests()
-    card = cards_mod.add_photo(tmp_path, _png(tmp_path / "z.png"), note="x")
-    assert card is not None
-    # 没有 provider / 没有卡片 → 不排线程
-    assert photo_note.schedule_photo_note(
-        config_dir=tmp_path, cards=[], user_text="a", reply_text="b",
-        provider=None, provider_config=None) is False
-    # chat 模块停用（纯核心快照）→ 不排线程
+    photo_memory.reset_for_tests()
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "w.png"))
+    assert staged is not None
+    assert photo_memory.schedule_photo_memory(
+        config_dir=tmp_path, character_id="shenshen", staged=[], user_text="a",
+        reply_text="b", provider=None, provider_config=None) is False
     fa.freeze_snapshot_for_tests(set())
     try:
-        assert photo_note.schedule_photo_note(
-            config_dir=tmp_path, cards=[card], user_text="a", reply_text="b",
-            provider=_FakeProvider("x"), provider_config=_fake_config()) is False
+        assert photo_memory.schedule_photo_memory(
+            config_dir=tmp_path, character_id="shenshen", staged=[staged],
+            user_text="a", reply_text="b",
+            provider=_FakeProvider("{}"), provider_config=_fake_config()) is False
     finally:
         fa.reset_snapshot_for_tests()
 
 
-@pytest.mark.parametrize("note", ["哥哥画的鲸鱼"])
-def test_memory_card_note_column_roundtrip(tmp_path, note):
-    card = cards_mod.add_text(tmp_path, "正文", note=note)
-    assert card is not None
-    assert cards_mod.load_cards(tmp_path)[0]["note"] == note
+@pytest.mark.parametrize("text", ["哥哥生日是 1 月 11 日"])
+def test_memory_item_text_roundtrip(tmp_path, text):
+    _seed(tmp_path, text, layer="fact")
+    assert cards_mod.iter_items(tmp_path)[0].text == text
 
 
 # ---------------------------------------------------------------- 右键菜单入口
 
 
-def test_menu_has_memory_card_and_diary_entries(monkeypatch):
+def test_menu_has_memory_card_and_diary_entries():
     """两个入口在注册表 + 默认布局里都在，且点了会调到宿主的打开方法。"""
     _app()
     from PySide6.QtWidgets import QMenu

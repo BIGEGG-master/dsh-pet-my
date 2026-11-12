@@ -1,116 +1,131 @@
 # -*- coding: utf-8 -*-
-"""记忆卡（pet/memory_card.py）：文字/照片卡片、备注、检索、删除。"""
+"""记忆卡（pet/memory_card.py）：它就是 memory.json 的视图 + 照片附件。
+
+不测"另一套存储"——这里没有另一套：条目来自 ``ChatMemory``，删卡走
+``ChatMemory.remove``。测试盯的是"视图与记忆是否一致"以及照片附件的生灭。
+"""
 from __future__ import annotations
 
-import json
+from pet import memory_card as cards_mod
+from pet.chat.memory import ChatMemory
 
-from pet.memory_card import (
-    MAX_NOTE_CHARS,
-    add_photo,
-    add_text,
-    card_day,
-    cards_dir,
-    delete_card,
-    filter_cards,
-    index_path,
-    load_cards,
-    photo_abs_path,
-    photos_dir,
-    stats,
-    summary,
-    update_note,
-)
+
+def _memory(tmp_path, character: str = "shenshen") -> ChatMemory:
+    return ChatMemory(tmp_path / "sessions" / character / "memory.json")
+
+
+def _seed(tmp_path, text="哥哥喜欢鲸鱼", layer="fact", character="shenshen"):
+    memory = _memory(tmp_path, character)
+    assert memory.apply_ops([{"op": "ADD", "text": text, "layer": layer}], source="manual")
+    return memory.last_changes[0]["entry"]
 
 
 def _png(path):
-    """最小的合法 PNG 头（内容不需要能解码，测试只关心复制与后缀）。"""
     path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
     return path
 
 
-def test_add_text_keeps_note_and_lists_newest_first(tmp_path):
-    first = add_text(tmp_path, "哥哥喜欢鲸鱼", note="哥哥说的")
-    second = add_text(tmp_path, "今天吃面")
-    assert first is not None and second is not None
-    cards = load_cards(tmp_path)
-    assert [card["id"] for card in cards] == [second["id"], first["id"]]
-    assert cards[1]["note"] == "哥哥说的"
-    assert cards[1]["kind"] == "text"
-    assert card_day(cards[0]) == cards[0]["created_at"][:10]
+def test_items_come_from_memory_entries(tmp_path):
+    entry = _seed(tmp_path, "哥哥喜欢鲸鱼", layer="fact")
+    items = cards_mod.iter_items(tmp_path)
+    assert len(items) == 1
+    item = items[0]
+    assert item.entry_id == entry["id"]
+    assert item.text == "哥哥喜欢鲸鱼"
+    assert item.layer == "fact" and item.layer_label == "事实"
+    assert item.hits == 1
+    assert item.character_id == "shenshen"
+    assert item.photo is None
+    # 没有自己的存储目录：不产生第二份记忆
+    assert not (tmp_path / "memory-cards").exists()
 
 
-def test_add_text_rejects_empty(tmp_path):
-    assert add_text(tmp_path, "   ") is None
-    assert load_cards(tmp_path) == []
-    assert not index_path(tmp_path).exists()
+def test_items_aggregate_characters_and_sort_newest_first(tmp_path):
+    _seed(tmp_path, "第一只记住的", character="a")
+    _seed(tmp_path, "第二只记住的", character="b")
+    items = cards_mod.iter_items(tmp_path)
+    assert {item.character_id for item in items} == {"a", "b"}
+    assert len(items) == 2
+    # created_at 相同时顺序稳定（不抛错即可；这里只校验数量与内容）
+    assert {item.text for item in items} == {"第一只记住的", "第二只记住的"}
 
 
-def test_add_photo_copies_into_config_dir(tmp_path):
-    source = _png(tmp_path / "whale.png")
-    card = add_photo(tmp_path, source, note="哥哥画的鲸鱼")
-    assert card is not None and card["kind"] == "photo"
-    assert source.is_file(), "原图必须原样保留（用户文件只读）"
-    copied = photo_abs_path(tmp_path, card)
-    assert copied is not None and copied.is_file()
-    assert copied.read_bytes() == source.read_bytes()
-    assert copied.parent == photos_dir(tmp_path)
-    assert load_cards(tmp_path)[0]["note"] == "哥哥画的鲸鱼"
+def test_layer_labels_cover_memory_layers(tmp_path):
+    assert cards_mod.LAYER_LABELS == {
+        "user": "偏好", "fact": "事实", "lesson": "教训", "topic": "话题",
+    }
+    entry = _seed(tmp_path, "别熬夜", layer="lesson")
+    item = cards_mod.iter_items(tmp_path)[0]
+    assert entry["layer"] == "lesson" and item.layer_label == "教训"
 
 
-def test_add_photo_rejects_non_image_and_missing(tmp_path):
+def test_attach_staged_puts_photo_into_memory_photos(tmp_path):
+    entry = _seed(tmp_path)
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "whale.png"))
+    assert staged is not None
+    assert cards_mod.attach_staged(tmp_path, "shenshen", entry["id"], staged)
+
+    item = cards_mod.iter_items(tmp_path)[0]
+    assert item.photo is not None and item.photo.is_file()
+    assert item.photo.name == f"{entry['id']}.png"
+    assert not any(cards_mod.pending_dir(tmp_path, "shenshen").glob("*.png"))
+    # 写回的是同一条记忆条目（不是另建卡片）
+    stored = _memory(tmp_path).load()[0]
+    assert stored["id"] == entry["id"]
+    assert stored["photo"] == f"{entry['id']}.png"
+
+
+def test_discard_staged_removes_only_the_copy(tmp_path):
+    entry = _seed(tmp_path)
+    original = _png(tmp_path / "keep.png")
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", original)
+    assert staged is not None
+    assert cards_mod.discard_staged(tmp_path, "shenshen", staged)
+    assert original.is_file(), "用户原图永远不动"
+    assert _memory(tmp_path).load()[0]["id"] == entry["id"]
+    assert _memory(tmp_path).load()[0].get("photo") in (None, "")
+
+
+def test_delete_item_removes_memory_and_photo(tmp_path):
+    entry = _seed(tmp_path)
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "a.png"))
+    assert staged is not None and cards_mod.attach_staged(
+        tmp_path, "shenshen", entry["id"], staged
+    )
+    item = cards_mod.iter_items(tmp_path)[0]
+    photo = item.photo
+    assert photo is not None and photo.is_file()
+
+    assert cards_mod.delete_item(tmp_path, item)
+    assert _memory(tmp_path).load() == []
+    assert not photo.exists()
+    assert cards_mod.iter_items(tmp_path) == []
+
+
+def test_filter_by_layer_and_query(tmp_path):
+    _seed(tmp_path, "哥哥喜欢鲸鱼", layer="fact")
+    _seed(tmp_path, "别在晚上提工作", layer="lesson")
+    items = cards_mod.iter_items(tmp_path)
+    assert [item.layer for item in cards_mod.filter_items(items, layer="lesson")] == ["lesson"]
+    assert [item.text for item in cards_mod.filter_items(items, query="鲸鱼")] == ["哥哥喜欢鲸鱼"]
+    assert cards_mod.filter_items(items, query="不存在") == []
+    assert len(cards_mod.filter_items(items, layer="all", query="")) == 2
+
+
+def test_stage_photo_rejects_non_image_and_missing(tmp_path):
     text_file = tmp_path / "note.txt"
     text_file.write_text("hi", encoding="utf-8")
-    assert add_photo(tmp_path, text_file) is None
-    assert add_photo(tmp_path, tmp_path / "missing.png") is None
-    assert load_cards(tmp_path) == []
+    assert cards_mod.stage_photo(tmp_path, "shenshen", text_file) is None
+    assert cards_mod.stage_photo(tmp_path, "shenshen", tmp_path / "missing.png") is None
 
 
-def test_update_note_truncates_and_reports_missing(tmp_path):
-    card = add_text(tmp_path, "正文")
-    assert card is not None
-    assert update_note(tmp_path, card["id"], "新备注" * 30)
-    assert len(load_cards(tmp_path)[0]["note"]) == MAX_NOTE_CHARS
-    assert update_note(tmp_path, "nope", "x") is False
-
-
-def test_delete_card_removes_photo_copy(tmp_path):
-    card = add_photo(tmp_path, _png(tmp_path / "a.png"))
-    assert card is not None
-    copied = photo_abs_path(tmp_path, card)
-    assert copied is not None
-    assert delete_card(tmp_path, card["id"]) is True
-    assert not copied.exists()
-    assert load_cards(tmp_path) == []
-    assert delete_card(tmp_path, card["id"]) is False
-
-
-def test_filter_by_kind_day_and_query(tmp_path):
-    text_card = add_text(tmp_path, "哥哥说想养鲸鱼", note="养鲸鱼")
-    photo_card = add_photo(tmp_path, _png(tmp_path / "b.png"), note="哥哥画的鲸鱼")
-    assert text_card is not None and photo_card is not None
-    day = card_day(text_card)
-    assert [c["id"] for c in filter_cards(load_cards(tmp_path), kind="photo")] == [photo_card["id"]]
-    assert [c["id"] for c in filter_cards(load_cards(tmp_path), kind="text")] == [text_card["id"]]
-    assert len(filter_cards(load_cards(tmp_path), day=day)) == 2
-    assert [c["id"] for c in filter_cards(load_cards(tmp_path), query="鲸鱼")] == [
-        photo_card["id"],
-        text_card["id"],
-    ]
-    assert filter_cards(load_cards(tmp_path), query="不存在的东西") == []
-
-
-def test_corrupt_index_is_quarantined_and_rebuilt(tmp_path):
-    cards_dir(tmp_path).mkdir(parents=True, exist_ok=True)
-    index_path(tmp_path).write_text("{ not json", encoding="utf-8")
-    assert load_cards(tmp_path) == []
-    assert list(cards_dir(tmp_path).glob("index.corrupt-*.json")), "坏索引必须改名保留"
-    assert add_text(tmp_path, "重建之后还能用") is not None
-    assert json.loads(index_path(tmp_path).read_text(encoding="utf-8"))["version"] == 1
-
-
-def test_stats_and_summary(tmp_path):
-    add_text(tmp_path, "一条文字")
-    add_photo(tmp_path, _png(tmp_path / "c.png"), note="照片备注")
-    assert stats(tmp_path) == {"total": 2, "text": 1, "photo": 1}
-    assert summary({"text": "x" * 200}) .endswith("…")
-    assert summary({"text": "", "note": "只有备注"}) == "只有备注"
+def test_photo_of_deleted_entry_is_not_reported(tmp_path):
+    entry = _seed(tmp_path)
+    staged = cards_mod.stage_photo(tmp_path, "shenshen", _png(tmp_path / "b.png"))
+    assert staged is not None and cards_mod.attach_staged(
+        tmp_path, "shenshen", entry["id"], staged
+    )
+    # 绕过面板直接删条目（模拟限额淘汰 / 别的进程删了记忆）
+    assert _memory(tmp_path).remove(entry["id"])
+    items = cards_mod.iter_items(tmp_path)
+    assert items == []

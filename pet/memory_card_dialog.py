@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""右键菜单「查看记忆卡」：她记住的文字与照片，带她自己写的备注。
+"""右键菜单「查看记忆卡」：把深层记忆（``memory.json``）摊开给人看。
 
-只做**看**与少量整理（改一行备注、删掉一张），不是编辑器：新增入口在聊天里
-（发图就存、说「记住：…」就进对话记忆），面板这里再开一个「写一条」只是给
-不想打字进对话框的用户一条路。
+**这里不是第二个记忆系统**：面板读的就是 ``ChatMemory.load()`` 那一份条目，
+显示的层 / 命中次数 / 日期都是记忆模块自己的字段，删除走 ``ChatMemory.remove``。
+它做的事只有三件：聚合（多角色）、把照片附件显示出来、提供搜索与按层筛选。
 
-视觉语言与待办面板 / 网络信息窗同一套令牌（卡片 12px 圆角、7px 圆角控件、
-强调色 #0a84ff、明暗跟随系统调色板），不发明新样式。
+照片是记忆条目的一部分（``photo`` 字段 + ``memory-photos/`` 目录），由她自己
+判断要不要记（``pet/chat/photo_memory.py``）——面板不提供"写一条"。
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QTextBrowser,
     QVBoxLayout,
@@ -36,6 +35,15 @@ log = logging.getLogger(__name__)
 
 _THUMB = QSize(150, 116)
 _GRID = QSize(166, 186)
+
+#: 层筛选下拉的选项（与记忆模块的层名一一对应）。
+_LAYER_CHOICES = (
+    ("全部", "all"),
+    ("偏好", "user"),
+    ("事实", "fact"),
+    ("教训", "lesson"),
+    ("话题", "topic"),
+)
 
 
 def _stylesheet(widget: QWidget) -> str:
@@ -57,25 +65,21 @@ def _stylesheet(widget: QWidget) -> str:
     QLabel#memoryCardTitle {{ font-size: 15px; font-weight: 600; color: {text}; }}
     QLabel#memoryCardHint {{ color: {hint}; font-size: 12px; }}
     QLabel#memoryCardEmpty {{ color: {hint}; font-size: 13px; }}
-    QLineEdit, QComboBox, QPlainTextEdit, QTextBrowser {{
+    QLineEdit, QComboBox, QTextBrowser {{
         background: {card};
         color: {text};
         border: 1px solid {border};
         border-radius: 7px;
         padding: 4px 8px;
     }}
-    QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {{ border: 1px solid {accent}; }}
+    QLineEdit:focus, QComboBox:focus, QTextBrowser:focus {{ border: 1px solid {accent}; }}
     QListWidget {{
         background: {card};
         border: 1px solid {border};
         border-radius: 12px;
         padding: 6px;
     }}
-    QListWidget::item {{
-        color: {text};
-        border-radius: 8px;
-        padding: 4px;
-    }}
+    QListWidget::item {{ color: {text}; border-radius: 8px; padding: 4px; }}
     QListWidget::item:selected {{ background: {hover}; color: {text}; }}
     QPushButton {{
         background: {card};
@@ -110,166 +114,18 @@ def scaled_pixmap(path, size: QSize) -> QPixmap:
     return QPixmap.fromImage(image) if not image.isNull() else QPixmap()
 
 
-class _TextCardDialog(QDialog):
-    """写一条文字卡：正文 + 备注（备注留空就用正文首行）。"""
-
-    def __init__(self, config_dir, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._config_dir = config_dir
-        self.setWindowTitle("写一条记忆")
-        self.setObjectName("memoryCardEditor")
-        self.resize(460, 320)
-        self.setStyleSheet(_stylesheet(self))
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(8)
-
-        title = QLabel("写一条记忆", self)
-        title.setObjectName("memoryCardTitle")
-        root.addWidget(title)
-        hint = QLabel("备注这一行会显示在卡片上，留空就用正文首行。", self)
-        hint.setObjectName("memoryCardHint")
-        hint.setWordWrap(True)
-        root.addWidget(hint)
-
-        self.body = QPlainTextEdit(self)
-        self.body.setPlaceholderText("想记住的事…")
-        root.addWidget(self.body, stretch=1)
-        self.note = QLineEdit(self)
-        self.note.setPlaceholderText("备注（可选，最多 80 字）")
-        root.addWidget(self.note)
-
-        buttons = QHBoxLayout()
-        buttons.addStretch(1)
-        cancel = QPushButton("取消", self)
-        cancel.clicked.connect(self.reject)
-        save = QPushButton("保存", self)
-        save.setProperty("accent", True)
-        save.setDefault(True)
-        save.clicked.connect(self._save)
-        buttons.addWidget(cancel)
-        buttons.addWidget(save)
-        root.addLayout(buttons)
-
-    def _save(self) -> None:
-        text = self.body.toPlainText().strip()
-        if not text:
-            QMessageBox.information(self, "记忆卡", "正文还是空的呢嘟。")
-            return
-        card = cards_mod.add_text(
-            self._config_dir, text, note=self.note.text(), source="manual"
-        )
-        if card is None:
-            QMessageBox.warning(self, "记忆卡", "这张卡没存上（可能卡片已满），稍后再试嘟。")
-            return
-        self.accept()
-
-
-class CardDetailDialog(QDialog):
-    """单张卡片：照片看大图 / 文字看全文，备注可改，卡可删。"""
-
-    changed = Signal()
-
-    def __init__(self, config_dir, card: dict, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._config_dir = config_dir
-        self._card = card
-        self.setWindowTitle(str(card.get("note") or "记忆卡"))
-        self.setObjectName("memoryCardDetail")
-        self.setMinimumSize(420, 340)
-        self.setStyleSheet(_stylesheet(self))
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(8)
-
-        meta = QLabel(
-            f"{'照片' if card.get('kind') == 'photo' else '文字'} · "
-            f"{str(card.get('created_at') or '')[:16].replace('T', ' ')}",
-            self,
-        )
-        meta.setObjectName("memoryCardHint")
-        root.addWidget(meta)
-
-        if card.get("kind") == "photo":
-            self._photo = QLabel(self)
-            self._photo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            path = cards_mod.photo_abs_path(config_dir, card)
-            if path is None:
-                self._photo.setText("照片副本找不到了（可能被手动删掉）")
-                self._photo.setObjectName("memoryCardHint")
-            else:
-                pixmap = scaled_pixmap(path, QSize(520, 380))
-                if pixmap.isNull():
-                    self._photo.setText("这张图打不开（格式不被支持）")
-                    self._photo.setObjectName("memoryCardHint")
-                else:
-                    self._photo.setPixmap(pixmap)
-            root.addWidget(self._photo, stretch=1)
-            if str(card.get("text") or "").strip():
-                caption = QLabel(str(card.get("text")), self)
-                caption.setWordWrap(True)
-                root.addWidget(caption)
-        else:
-            viewer = QTextBrowser(self)
-            viewer.setPlainText(str(card.get("text") or ""))
-            root.addWidget(viewer, stretch=1)
-
-        note_row = QHBoxLayout()
-        note_label = QLabel("备注", self)
-        note_label.setObjectName("memoryCardHint")
-        self._note_edit = QLineEdit(str(card.get("note") or ""), self)
-        self._note_edit.setMaxLength(cards_mod.MAX_NOTE_CHARS)
-        self._note_edit.setPlaceholderText("她给这条记忆写的一句话")
-        note_row.addWidget(note_label)
-        note_row.addWidget(self._note_edit, stretch=1)
-        root.addLayout(note_row)
-
-        buttons = QHBoxLayout()
-        self._delete_btn = QPushButton("删除这张卡", self)
-        self._delete_btn.clicked.connect(self._delete)
-        buttons.addWidget(self._delete_btn)
-        buttons.addStretch(1)
-        save = QPushButton("保存备注", self)
-        save.setProperty("accent", True)
-        save.clicked.connect(self._save_note)
-        close = QPushButton("关闭", self)
-        close.clicked.connect(self.accept)
-        buttons.addWidget(save)
-        buttons.addWidget(close)
-        root.addLayout(buttons)
-
-    def _save_note(self) -> None:
-        if cards_mod.update_note(self._config_dir, str(self._card["id"]), self._note_edit.text()):
-            self._card["note"] = self._note_edit.text().strip()
-            self.changed.emit()
-        else:
-            QMessageBox.warning(self, "记忆卡", "备注没存上，稍后再试嘟。")
-
-    def _delete(self) -> None:
-        confirm = QMessageBox.question(
-            self,
-            "记忆卡",
-            "要把这张卡删掉吗？删了就找不回来了嘟。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if confirm != QMessageBox.StandardButton.Yes:
-            return
-        if cards_mod.delete_card(self._config_dir, str(self._card["id"])):
-            self.changed.emit()
-            self.accept()
-        else:
-            QMessageBox.warning(self, "记忆卡", "没删掉，稍后再试嘟。")
+def _line(item: cards_mod.MemoryItem, limit: int = 24) -> str:
+    text = " ".join(item.text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 class MemoryCardDialog(QDialog):
-    """记忆卡面板：搜索 / 类型筛选 / 卡片网格 / 双击详情。"""
+    """记忆卡面板：搜索 / 按层筛选 / 卡片网格 / 双击详情。"""
 
     def __init__(self, config_dir, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config_dir = config_dir
-        self._cards: list[dict] = []
+        self._items: list[cards_mod.MemoryItem] = []
         self._details: list[CardDetailDialog] = []
 
         self.setWindowTitle("记忆卡")
@@ -297,19 +153,18 @@ class MemoryCardDialog(QDialog):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
         self._search = QLineEdit(self)
-        self._search.setPlaceholderText("搜备注或正文…")
+        self._search.setPlaceholderText("搜她说记住的事…")
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._apply_filter)
-        self._kind = QComboBox(self)
-        self._kind.addItem("全部", "all")
-        self._kind.addItem("只看文字", "text")
-        self._kind.addItem("只看照片", "photo")
-        self._kind.currentIndexChanged.connect(self._apply_filter)
-        self._add_btn = QPushButton("写一条", self)
-        self._add_btn.clicked.connect(self._add_text_card)
+        self._layer = QComboBox(self)
+        for label, key in _LAYER_CHOICES:
+            self._layer.addItem(label, key)
+        self._layer.currentIndexChanged.connect(self._apply_filter)
+        self._refresh_btn = QPushButton("刷新", self)
+        self._refresh_btn.clicked.connect(self.reload)
         toolbar.addWidget(self._search, stretch=1)
-        toolbar.addWidget(self._kind)
-        toolbar.addWidget(self._add_btn)
+        toolbar.addWidget(self._layer)
+        toolbar.addWidget(self._refresh_btn)
         root.addLayout(toolbar)
 
         self._list = QListWidget(self)
@@ -321,6 +176,7 @@ class MemoryCardDialog(QDialog):
         self._list.setWordWrap(True)
         self._list.setUniformItemSizes(True)
         self._list.setSpacing(4)
+        self._list.setIconSize(_THUMB)
         self._list.itemDoubleClicked.connect(self._open_item)
         root.addWidget(self._list, stretch=1)
 
@@ -340,75 +196,138 @@ class MemoryCardDialog(QDialog):
 
     # ------------------------------------------------------------ 数据
     def reload(self) -> None:
-        """重读索引并刷新统计（新增/删除/改备注之后调一次）。"""
-        self._cards = cards_mod.load_cards(self._config_dir)
-        counts = cards_mod.stats(self._config_dir)
+        """重读记忆（就是 she 会被注入的那一份）。"""
+        self._items = cards_mod.iter_items(self._config_dir)
+        counts = cards_mod.layer_counts(self._items)
+        photos = sum(1 for item in self._items if item.photo is not None)
         self._hint.setText(
-            f"一共 {counts['total']} 张：{counts['text']} 段文字、{counts['photo']} 张照片。"
-            "双击任意一张看全文或大图；备注可以自己改。"
+            f"她一共记住 {len(self._items)} 条："
+            f"偏好 {counts.get('user', 0)}、事实 {counts.get('fact', 0)}、"
+            f"教训 {counts.get('lesson', 0)}、话题 {counts.get('topic', 0)}；"
+            f"其中 {photos} 条带照片。这些就是她聊天时会想起来的记忆，"
+            "记不记由她在对话里自己判断，不是这里手动写的。"
         )
         self._apply_filter()
 
     def _apply_filter(self) -> None:
         query = self._search.text()
-        kind = str(self._kind.currentData() or "all")
-        matched = cards_mod.filter_cards(self._cards, query=query, kind=kind)
+        layer = str(self._layer.currentData() or "all")
+        matched = cards_mod.filter_items(self._items, query=query, layer=layer)
         self._list.clear()
-        for card in matched:
-            item = QListWidgetItem(self._list)
-            item.setData(Qt.ItemDataRole.UserRole, card["id"])
-            item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-            note = str(card.get("note") or "").strip()
-            line = note or cards_mod.summary(card, 24)
-            day = cards_mod.card_day(card)
-            item.setText(f"{line}\n{day}")
-            item.setToolTip(
-                (note + "\n\n" if note else "") + cards_mod.summary(card, 200)
-            )
-            if card.get("kind") == "photo":
-                path = cards_mod.photo_abs_path(self._config_dir, card)
-                if path is not None:
-                    pixmap = scaled_pixmap(path, _THUMB)
-                    if not pixmap.isNull():
-                        item.setIcon(pixmap)
-            if not card.get("note"):
-                item.setForeground(self.palette().color(QPalette.ColorRole.PlaceholderText))
+        for item in matched:
+            node = QListWidgetItem(self._list)
+            node.setData(Qt.ItemDataRole.UserRole, item.entry_id)
+            node.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            day = item.created_at[:10]
+            node.setText(f"{_line(item)}\n{item.layer_label} · {day}")
+            tooltip = f"{item.text}\n\n{item.layer_label} · 命中 {item.hits} 次 · {day}"
+            if item.archived:
+                tooltip += "\n（已归档：不再注入，但还留着）"
+            node.setToolTip(tooltip)
+            if item.photo is not None:
+                pixmap = scaled_pixmap(item.photo, _THUMB)
+                if not pixmap.isNull():
+                    node.setIcon(pixmap)
         has_items = bool(matched)
         self._list.setVisible(has_items)
         self._empty.setVisible(not has_items)
         if not has_items:
             self._empty.setText(
-                "还没有记忆卡嘟。\n发一张照片给嘟嘟、或者点上面的「写一条」，就会出现在这里。"
+                "她还什么都没记住嘟。\n聊过几轮、或者发一张图给她，她自己判断要不要记下来。"
                 if not query
-                else "没有找到匹配的卡片嘟。"
+                else "没有找到匹配的记忆嘟。"
             )
 
-    def _card_by_id(self, card_id: str) -> dict | None:
-        for card in self._cards:
-            if card["id"] == card_id:
-                return card
+    def _item_by_id(self, entry_id: str) -> cards_mod.MemoryItem | None:
+        for item in self._items:
+            if item.entry_id == entry_id:
+                return item
         return None
 
-    def _open_item(self, item: QListWidgetItem) -> None:
-        card = self._card_by_id(str(item.data(Qt.ItemDataRole.UserRole) or ""))
-        if card is None:
+    def _open_item(self, node: QListWidgetItem) -> None:
+        item = self._item_by_id(str(node.data(Qt.ItemDataRole.UserRole) or ""))
+        if item is None:
             return
-        dialog = CardDetailDialog(self._config_dir, card, self)
+        dialog = CardDetailDialog(self._config_dir, item, self)
         dialog.changed.connect(self.reload)
         dialog.finished.connect(lambda _result, d=dialog: self._forget_detail(d))
         self._details.append(dialog)
         dialog.show()
 
-    def _forget_detail(self, dialog: CardDetailDialog) -> None:
+    def _forget_detail(self, dialog: "CardDetailDialog") -> None:
         if dialog in self._details:
             self._details.remove(dialog)
-
-    def _add_text_card(self) -> None:
-        editor = _TextCardDialog(self._config_dir, self)
-        if editor.exec() == QDialog.DialogCode.Accepted:
-            self.reload()
 
     # ------------------------------------------------------------ 测试/排查面
     @property
     def item_count(self) -> int:
         return self._list.count()
+
+
+class CardDetailDialog(QDialog):
+    """一条记忆：有照片看大图，没照片看全文；能删（等于让她忘掉）。"""
+
+    changed = Signal()
+
+    def __init__(self, config_dir, item: cards_mod.MemoryItem, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._config_dir = config_dir
+        self._item = item
+        self.setWindowTitle(item.layer_label)
+        self.setObjectName("memoryCardDetail")
+        self.setMinimumSize(420, 340)
+        self.setStyleSheet(_stylesheet(self))
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(8)
+
+        meta_text = (
+            f"{item.layer_label} · 命中 {item.hits} 次 · "
+            f"{item.created_at[:16].replace('T', ' ')}"
+        )
+        if item.archived:
+            meta_text += " · 已归档"
+        meta = QLabel(meta_text, self)
+        meta.setObjectName("memoryCardHint")
+        root.addWidget(meta)
+
+        if item.photo is not None:
+            photo = QLabel(self)
+            photo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pixmap = scaled_pixmap(item.photo, QSize(520, 380))
+            if pixmap.isNull():
+                photo.setText("这张图打不开了（格式不被支持）")
+            else:
+                photo.setPixmap(pixmap)
+            root.addWidget(photo, stretch=1)
+
+        viewer = QTextBrowser(self)
+        viewer.setPlainText(item.text)
+        root.addWidget(viewer, stretch=1 if item.photo is None else 0)
+
+        buttons = QHBoxLayout()
+        self._delete_btn = QPushButton("删掉这条记忆", self)
+        self._delete_btn.clicked.connect(self._delete)
+        buttons.addWidget(self._delete_btn)
+        buttons.addStretch(1)
+        close = QPushButton("关闭", self)
+        close.clicked.connect(self.accept)
+        buttons.addWidget(close)
+        root.addLayout(buttons)
+
+    def _delete(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "记忆卡",
+            "删掉之后她就真的不记得这件事了嘟（记忆文件里也会消失）。确定吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        if cards_mod.delete_item(self._config_dir, self._item):
+            self.changed.emit()
+            self.accept()
+        else:
+            QMessageBox.warning(self, "记忆卡", "没删掉，稍后再试嘟。")

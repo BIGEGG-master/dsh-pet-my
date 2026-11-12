@@ -264,6 +264,8 @@ def _run(path: Path, turns: list[tuple[str, str]], provider, provider_config) ->
     raw = _complete(provider, messages, provider_config)
     ops = parse_ops(raw)
     if ops:
+        # 只写记忆本身：记忆卡是它的视图（``pet/memory_card.py`` 直接读这份文件），
+        # 没有第二份存储要同步，所以这里写完就结束。
         memory.apply_ops(ops, source="auto")
     elif str(raw or "").strip():
         # 有输出却解析不出（截断/格式漂移）：静默丢弃会让"记不住事"无从排查。
