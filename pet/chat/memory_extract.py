@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import feature_activation as _fa
-from .memory import MAX_KEYWORDS, ChatMemory, render_injection
+from .memory import MAX_KEYWORDS, ChatMemory, _clean_feeling, render_injection
 from .providers import thinking_payload
 
 log = logging.getLogger(__name__)
@@ -90,9 +90,11 @@ _EXTRACT_SYSTEM = (
     "用于以后按需检索。\n"
     "5. 只记关于「用户」的长期事实；寒暄、闲聊、一次性请求、关于桌宠的事实都不记。\n"
     "6. text 是一句简短的第一人称陈述（与已有记忆风格一致，如「我不吃辣」），不超过 50 字。\n"
-    "7. 已有记忆里已有同义事实时不要重复 ADD；事实有变化用 UPDATE；用户明确表示"
+    "7. 每条可带 feeling：你用第一人称写一句**对这条记忆的感受**（如「他连这种小事都"
+    "告诉我，我有点开心」），不超过 40 字；没有感受就不写这个字段。\n"
+    "8. 已有记忆里已有同义事实时不要重复 ADD；事实有变化用 UPDATE；用户明确表示"
     "「别记了 / 忘掉」用 FORGET（text 填要删掉的那条已有记忆）。\n"
-    "8. 没有值得记住的内容时，输出 []。"
+    "9. 没有值得记住的内容时，输出 []。"
 )
 
 _EXTRACT_USER = (
@@ -157,6 +159,9 @@ def parse_ops(raw: str) -> list[dict[str, Any]]:
             keywords = _clean_keywords(item.get("keywords"))
             if keywords:
                 parsed["keywords"] = keywords
+            feeling = _clean_feeling(item.get("feeling"))
+            if feeling:
+                parsed["feeling"] = feeling
             ops.append(parsed)
         return ops
     return []

@@ -167,7 +167,7 @@ def test_parse_verdict_accepts_json_and_string_flags():
     from pet.chat.photo_memory import parse_verdict
 
     verdict = parse_verdict('{"keep": true, "note": "「哥哥画的鲸鱼」"}')
-    assert verdict == {"keep": True, "note": "哥哥画的鲸鱼"}
+    assert verdict == {"keep": True, "note": "哥哥画的鲸鱼", "feeling": ""}
     assert parse_verdict('{"keep": "false", "note": "随手截图"}')["keep"] is False
     assert parse_verdict('```json\n{"keep": true, "note": "哥哥的晚饭"}\n```')["note"] == "哥哥的晚饭"
     assert parse_verdict("完全不是 JSON") is None

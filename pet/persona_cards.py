@@ -3,33 +3,50 @@
 
 与「台词模板」(``persona_template``) 的分工：
 - 台词模板只覆盖 ``dialogue_phrases``（一个事件一组文案），是**表达层**的补丁；
-- 角色卡是**一个角色**的完整身份，应用时同时改三处：
+- 角色卡是**一个角色**的完整身份，应用时改三处：
   ``chat.default_system_prompt``（人设）、``character_aliases``（显示名）、
   ``dialogue_mode`` + ``dialogue_phrases``（口吻）。
 
-为什么需要它：桌宠只有一套立绘素材，但用户可能想让同一只桌宠说不同角色的话
-（比如插件里已有的「小肥鱼」）。切角色卡不改素材、不重启，只换身份三件套。
+**和设置页那栏 System Prompt 的关系**：它们是同一个字段。应用一张卡会把卡里的
+人设写进 System Prompt，手改 System Prompt 则让当前配置不再等于那张卡——两条
+入口写同一个键，这就是"看起来冲突"的来源。应用卡时会在顶层写下
+``prompt_source``（``card:<id>`` / ``manual``），设置页据此提示当前人设来自哪里。
 
 卡从两处加载（同 id 时用户卡优先）：
 - 内置：``pet/persona_cards/builtin/*.json``（随包分发）
-- 用户：``<config_dir>/persona-cards/*.json``（设置页导入/导出）
+- 用户：``<config_dir>/persona-cards/``（设置页导入/导出）
 
-卡格式（``persona-card/v1``）::
+**两种输入格式都认**：
 
-    {
-      "version": "persona-card/v1",
-      "id": "feiyu",
-      "name": "小肥鱼",
-      "system_prompt": "你是「小肥鱼」……",
-      "aliases": {"shenshen": "小肥鱼"},
-      "phrases": {"activity.default": ["……", "……"]}
-    }
-"""
+1. ``persona-card/v1`` JSON（可带台词）::
+
+       {
+         "version": "persona-card/v1",
+         "id": "feiyu",
+         "name": "小肥鱼",
+         "system_prompt": "你是「小肥鱼」……",
+         "aliases": {"shenshen": "小肥鱼"},
+         "phrases": {"activity.default": ["……", "……"]}
+       }
+
+2. **Markdown / 纯文本**（只提供人设，最省事的写法）::
+
+       # 角色卡：嘟嘟
+
+       ## 一、你是谁
+       - 你叫嘟嘟……
+
+   规则：第一个 ``# 标题`` 当显示名（去掉「角色卡：」这类前缀），其余正文整段
+   作为 System Prompt；id 由正文哈希生成（同内容同 id，重复导入即覆盖），
+   不带台词（应用时不动现有 ``dialogue_phrases``）。
+   """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping
@@ -38,10 +55,17 @@ log = logging.getLogger(__name__)
 
 CARD_VERSION = "persona-card/v1"
 CARD_SUFFIX = ".json"
+#: 能读的卡文件后缀：JSON 是完整卡，md/txt 只当人设文档（设置页导入即转成 JSON）。
+CARD_SUFFIXES = (".json", ".md", ".markdown", ".txt")
+#: Markdown 人设正文上限：System Prompt 每轮都发，太长的文档会挤掉对话历史预算。
+MAX_PROMPT_CHARS = 8000
 #: 单条台词上限（与 config 的 dialogue_phrases 清洗口径一致）
 MAX_PHRASE_CHARS = 120
 #: 每个事件最多保留几条变体
 MAX_PHRASES_PER_KEY = 8
+
+_MD_TITLE = re.compile(r"^\s{0,3}#\s+(.+?)\s*$", re.MULTILINE)
+_MD_TITLE_PREFIX = re.compile(r"^(?:角色卡|人设|角色|persona)\s*[:：]\s*", re.IGNORECASE)
 
 
 def _builtin_dir() -> Path:
@@ -139,22 +163,106 @@ def card_from_dict(data: Any, *, source: str = "", path: Path | None = None) -> 
     )
 
 
+def card_from_markdown(
+    text: str,
+    *,
+    name: str = "",
+    path: Path | None = None,
+) -> PersonaCard | None:
+    """Markdown / 纯文本 → 卡：``# 标题`` 当显示名，其余正文当人设。
+
+    md 没有台词，所以 ``phrases`` 为空——应用时**不会动**现有事件台词，
+    这是刻意的：人设文档不该顺手把口吻洗掉。
+    """
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return None
+    title = ""
+    match = _MD_TITLE.search(raw)
+    body = raw
+    if match is not None and match.start() <= 3:
+        # 只认文首那个 H1；正文里的 ``## 分节`` 原样留在人设里。
+        title = _MD_TITLE_PREFIX.sub("", match.group(1).strip()).strip()
+        body = (raw[: match.start()] + raw[match.end():]).strip()
+    prompt = body[:MAX_PROMPT_CHARS].strip()
+    if not prompt:
+        return None
+    display = title or str(name or "").strip() or (path.stem if path else "")
+    if not display:
+        return None
+    digest = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:10]
+    return PersonaCard(
+        id=f"md-{digest}",
+        name=display[:40],
+        system_prompt=prompt,
+        phrases={},
+        aliases={},
+        source="markdown",
+        path=path,
+    )
+
+
+def card_to_markdown(card: PersonaCard) -> str:
+    """卡 → Markdown（人设文档形态，丢掉台词；导出给人看/再导入都行）。"""
+    lines = [f"# {card.name}", "", str(card.system_prompt or "").strip()]
+    return "\n".join(lines).strip() + "\n"
+
+
+#: 补充段的分隔标题：模型能一眼看出"前面是角色，后面是用户追加的要求"。
+SUPPLEMENT_HEADER = "【补充说明】"
+
+
+def compose_prompt(base: str, supplement: str, *, merge: bool = True) -> str:
+    """角色卡人设 + 用户补充 → 最终 System Prompt。
+
+    为什么需要它：人设只有 ``chat.default_system_prompt`` 一个字段，而"应用角色卡"
+    和"手写 System Prompt"两个入口都写它，于是互相覆盖。现在拆成两段：
+    ``prompt_base``（卡/手写的主体）与 ``prompt_supplement``（手写补充），
+    这个函数把两段合成一个字段——运行时读取方仍然只看 default_system_prompt，
+    行为不变，只是不再二选一。
+
+    ``merge=False`` 时只用主体（补充保留在配置里，随时可以再打开叠加）。
+    """
+    body = str(base or "").strip()
+    extra = str(supplement or "").strip()
+    if not merge or not extra:
+        return body
+    if not body:
+        return extra
+    return f"{body}\n\n{SUPPLEMENT_HEADER}\n{extra}"
+
+
 def load_card_file(path: Path) -> PersonaCard | None:
-    """读一份卡文件；坏文件只记日志（不影响其它卡）。"""
+    """读一份卡文件（``.json`` 或 ``.md`` / ``.txt``）；坏文件只记日志。"""
+    path = Path(path)
+    suffix = path.suffix.lower()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return None
-    except (OSError, ValueError) as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         log.warning("角色卡读取失败: %s (%s)", path, exc)
         return None
+    if suffix not in CARD_SUFFIXES:
+        return None
+    if suffix != ".json":
+        return card_from_markdown(text, path=path)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        # 后缀是 .json 但内容其实是 md（用户改后缀的常见情况）：尽力按 md 读一次。
+        return card_from_markdown(text, path=path)
     return card_from_dict(data, source=str(path.parent.name), path=path)
 
 
 def _load_dir(directory: Path, source: str) -> list[PersonaCard]:
     cards: list[PersonaCard] = []
     try:
-        files = sorted(p for p in directory.glob("*" + CARD_SUFFIX) if p.is_file())
+        files = sorted(
+            p
+            for p in directory.iterdir()
+            if p.is_file() and p.suffix.lower() in CARD_SUFFIXES
+        )
     except OSError:
         return cards
     for path in files:
@@ -267,9 +375,23 @@ def save_user_card(config_dir: Path | str, card: PersonaCard) -> Path:
 
 
 def import_card(config_dir: Path | str, source_path: Path) -> PersonaCard | None:
-    """导入一份外部卡（非法返回 ``None``；合法则落到用户卡目录）。"""
+    """导入一份外部卡（JSON 或 Markdown；非法返回 ``None``，合法则落到用户卡目录）。
+
+    统一存成 ``.json``：md 只是输入形态（人设文档），落盘时转成完整卡格式，
+    以后在设置页能直接编辑/导出；同 id 覆盖旧卡（md 的 id 由正文哈希决定，
+    同一份文档重复导入只会刷新那一张）。
+    """
     card = load_card_file(Path(source_path))
     if card is None:
         return None
     save_user_card(config_dir, card)
     return card
+
+
+def prompt_source(config: Mapping[str, Any]) -> str:
+    """当前人设来自哪里：``card:<id>`` / ``manual`` / ``""``（未记录，旧配置）。
+
+    设置页用它说明"你现在这段 System Prompt 是不是某张卡写的"——两条入口写
+    同一个字段，用户需要看见归属，才不会以为它们能各管一半。
+    """
+    return str(config.get("prompt_source") or "").strip()

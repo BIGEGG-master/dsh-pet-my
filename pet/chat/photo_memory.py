@@ -31,7 +31,7 @@ from typing import Any
 
 from .. import feature_activation as _fa
 from .. import memory_card as cards_mod
-from .memory import ChatMemory
+from .memory import ChatMemory, _clean_feeling
 from .memory_extract import _RESPONSE_CHAR_LIMIT, _complete
 
 log = logging.getLogger(__name__)
@@ -49,8 +49,10 @@ _SYSTEM = (
     "值得记：他的照片、他画/做的东西、他的作品、有纪念意义的场景、他特意给你看的。\n"
     "不值得记：随手截图、表情包、测试图、纯文字截图、与你们无关的图。\n"
     "只输出一个 JSON 对象，不要输出其它文字或代码围栏：\n"
-    '{"keep": true 或 false, "note": "不超过 16 个汉字的备注"}\n'
+    '{"keep": true 或 false, "note": "不超过 16 个汉字的备注", '
+    '"feeling": "你对这张图的感受，第一人称一句话"}\n'
     "备注是第一人称、像你自己记的小本子（例：哥哥画的鲸鱼）。"
+    "feeling 写你看到它时的心情（例：他居然真的画了，我有点想笑）。"
 )
 
 _USER = (
@@ -103,7 +105,11 @@ def parse_verdict(raw: str) -> dict[str, Any] | None:
         keep = data.get("keep")
         if isinstance(keep, str):
             keep = keep.strip().lower() in ("true", "yes", "1", "是", "记")
-        return {"keep": bool(keep), "note": _clean_note(data.get("note"))}
+        return {
+            "keep": bool(keep),
+            "note": _clean_note(data.get("note")),
+            "feeling": _clean_feeling(data.get("feeling")),
+        }
     return None
 
 
@@ -211,12 +217,16 @@ def _apply_verdict(
         log.debug("照片记忆：她判断不需要记住，已删除暂存副本")
         return
     note = (verdict or {}).get("note") or fallback_note(user_text)
+    feeling = str((verdict or {}).get("feeling") or "").strip()
     memory = ChatMemory(
         cards_mod.sessions_root(config_dir) / character_id / "memory.json"
     )
     # 走自动通道（apply_ops），不借手动通道 add()：照片记忆是"她自己记的"，
     # 与聊天提炼出来的条目同一来源、同一去重/归档规则。
-    memory.apply_ops([{"op": "ADD", "text": note, "layer": "topic"}], source="auto")
+    op: dict[str, Any] = {"op": "ADD", "text": note, "layer": "topic"}
+    if feeling:
+        op["feeling"] = feeling
+    memory.apply_ops([op], source="auto")
     entry = next(
         (
             change["entry"]

@@ -81,6 +81,15 @@ class MemoryItem:
             return 0
 
     @property
+    def feeling(self) -> str:
+        """她对这条记忆的感受（第一人称一句话）；没有就是空串。
+
+        这是条目自己的字段（提炼时一起写的），不是面板另算的文案——面板只负责
+        显示；它不参与注入，所以不会挤占对话预算。
+        """
+        return " ".join(str(self.entry.get("feeling") or "").split())
+
+    @property
     def created_at(self) -> str:
         return str(self.entry.get("created_at") or "")
 

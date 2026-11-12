@@ -64,6 +64,7 @@ def _stylesheet(widget: QWidget) -> str:
     }}
     QLabel#memoryCardTitle {{ font-size: 15px; font-weight: 600; color: {text}; }}
     QLabel#memoryCardHint {{ color: {hint}; font-size: 12px; }}
+    QLabel#memoryCardFeeling {{ color: {hint}; font-size: 12px; font-style: italic; }}
     QLabel#memoryCardEmpty {{ color: {hint}; font-size: 13px; }}
     QLineEdit, QComboBox, QTextBrowser {{
         background: {card};
@@ -219,8 +220,14 @@ class MemoryCardDialog(QDialog):
             node.setData(Qt.ItemDataRole.UserRole, item.entry_id)
             node.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
             day = item.created_at[:10]
-            node.setText(f"{_line(item)}\n{item.layer_label} · {day}")
+            lines = [_line(item), f"{item.layer_label} · {day}"]
+            if item.feeling:
+                feeling = " ".join(item.feeling.split())
+                lines.append("「" + (feeling if len(feeling) <= 16 else feeling[:15] + "…") + "」")
+            node.setText("\n".join(lines))
             tooltip = f"{item.text}\n\n{item.layer_label} · 命中 {item.hits} 次 · {day}"
+            if item.feeling:
+                tooltip += f"\n\n她的感受：{item.feeling}"
             if item.archived:
                 tooltip += "\n（已归档：不再注入，但还留着）"
             node.setToolTip(tooltip)
@@ -305,6 +312,12 @@ class CardDetailDialog(QDialog):
         viewer = QTextBrowser(self)
         viewer.setPlainText(item.text)
         root.addWidget(viewer, stretch=1 if item.photo is None else 0)
+
+        if item.feeling:
+            feeling = QLabel(f"她的感受：{item.feeling}", self)
+            feeling.setObjectName("memoryCardFeeling")
+            feeling.setWordWrap(True)
+            root.addWidget(feeling)
 
         buttons = QHBoxLayout()
         self._delete_btn = QPushButton("删掉这条记忆", self)

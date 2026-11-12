@@ -84,6 +84,20 @@ class _AiSettingsPage(QWidget):
         self.key = _line_edit(password=True)
         self.prompt = QPlainTextEdit(self.settings.default_system_prompt)
         self.prompt.setMinimumSize(240, 80)
+        # 人设两段式：主体（角色卡或手写）+ 补充（手写追加）。旧配置没有
+        # prompt_base，就用当前的 default_system_prompt 当主体，行为与以前一致。
+        base_prompt = str(config.get("prompt_base") or "").strip()
+        if base_prompt:
+            self.prompt.setPlainText(base_prompt)
+        self.prompt_supplement = QPlainTextEdit(
+            str(config.get("prompt_supplement") or "")
+        )
+        self.prompt_supplement.setMinimumSize(240, 60)
+        self.prompt_supplement.setPlaceholderText(
+            "可选：追加在角色卡人设之后的要求（例如「回答里不要用表情符号」）。"
+        )
+        self.prompt_merge = ToggleSwitch()
+        self.prompt_merge.setChecked(bool(config.get("prompt_merge", True)))
         self.timeout = BrowserSpinBox()
         self.timeout.setRange(1, 600)
         self.timeout.setSuffix(" 秒")
@@ -147,7 +161,7 @@ class _AiSettingsPage(QWidget):
         self.persona_card_apply_btn = QPushButton("应用这张卡…", self)
         self.persona_card_apply_btn.setProperty("variant", "ghost")
         self.persona_card_apply_btn.clicked.connect(self._apply_persona_card)
-        self.persona_card_import_btn = QPushButton("从 JSON 导入…", self)
+        self.persona_card_import_btn = QPushButton("从文件导入…（JSON / Markdown）", self)
         self.persona_card_import_btn.setProperty("variant", "ghost")
         self.persona_card_import_btn.clicked.connect(self._import_persona_card)
         self.persona_card_export_btn = QPushButton("导出当前卡…", self)
@@ -260,7 +274,18 @@ class _AiSettingsPage(QWidget):
             SettingRow("api_url", "API 地址", "OpenAI Chat Completions 兼容服务地址。", self.url),
             SettingRow("model", "模型", "发送请求时使用的模型标识。", self.model),
             SettingRow("api_key", "API Key", "凭据优先保存到系统钥匙串。", self.key),
-            SettingRow("system_prompt", "System Prompt", "定义桌宠对话时的身份、语气和行为。", self.prompt, stacked=True),
+            SettingRow("system_prompt", "System Prompt",
+                       "定义桌宠对话时的身份、语气和行为。这里写的是**主体人设**："
+                       "应用角色卡会把卡的人设写进来；你手写的部分建议放到下面的"
+                       "「补充说明」，两者会叠在一起生效。",
+                       self.prompt, stacked=True),
+            SettingRow("prompt_supplement", "补充说明（追加在人设之后）",
+                       "写在这儿的内容会接在主体人设后面一起发给模型，"
+                       "应用角色卡不会清掉它——适合放你自己的小要求。",
+                       self.prompt_supplement, stacked=True),
+            SettingRow("prompt_merge", "角色卡 + 补充同时生效",
+                       "开：主体人设与补充说明叠加。关：只用主体人设（补充仍然保存，"
+                       "以后可以再打开）。", self.prompt_merge),
             SettingRow("connection_test", "连接测试", self.test_result.text(), self.test_button),
         ], self))
         root.addWidget(SettingsSection("场景扮演", [
@@ -354,20 +379,23 @@ class _AiSettingsPage(QWidget):
             SettingRow(
                 "persona_card", "角色卡",
                 "一份卡就是一个角色的完整身份：人设（System Prompt）、显示名、"
-                "以及全部事件台词。内置「小肥鱼」来自 DSH 桌宠插件；也可以把卡导成 "
-                "JSON 分享，或从 JSON 导入别人的卡。",
+                "以及全部事件台词。可以导入 JSON（persona-card/v1，带台词）"
+                "或 Markdown / TXT（只写人设，正文即 System Prompt）。"
+                "注意：人设与上面的 System Prompt 是同一个字段，应用卡会覆盖它。",
                 self.persona_card_combo,
             ),
             SettingRow(
                 "persona_card_apply", "应用这张卡",
                 "把选中卡的人设写进 System Prompt、把角色显示名改成卡里的名字、"
                 "并整组替换事件台词（台词模式切到「自定义」）。只动这三处，"
-                "不碰模型、API Key、语音与记忆设置。",
+                "不碰模型、API Key、语音与记忆设置。Markdown 卡没有台词，"
+                "应用时不会动现有台词。",
                 self.persona_card_apply_btn,
             ),
             SettingRow(
-                "persona_card_import", "从 JSON 导入",
-                "读一份 persona-card/v1 JSON，存到本机角色卡目录；同 id 会覆盖旧卡。",
+                "persona_card_import", "从文件导入",
+                "读 JSON（persona-card/v1）或 Markdown / TXT（# 标题当名字、正文当人设），"
+                "统一存到本机角色卡目录；同 id 会覆盖旧卡。",
                 self.persona_card_import_btn,
             ),
             SettingRow(
@@ -840,7 +868,8 @@ class _AiSettingsPage(QWidget):
             self.settings.active_provider = next(iter(self.settings.providers))
         for pid in list(self.settings.providers):
             self._apply_draft_to_provider(pid)
-        self.settings.default_system_prompt = self.prompt.toPlainText().strip()
+        self.settings.default_system_prompt = self._composed_prompt()
+        self._sync_prompt_source()
         # 场景扮演三键是每宠键：SlotRoutedConfig 会把它们写进这只宠的 slot 档案。
         self.config.set("roleplay_enabled", self.roleplay_enabled.isChecked())
         self.config.set("roleplay_scene", self._roleplay_scene)
@@ -917,6 +946,46 @@ class _AiSettingsPage(QWidget):
 
         return find_card(str(self.persona_card_combo.currentData() or ""), self.config.dir)
 
+    def _sync_prompt_source(self) -> None:
+        """修正人设来源标记：主体与某张卡完全一致就记 ``card:<id>``，否则 ``manual``。
+
+        看的是**主体**（不含补充）：这样"应用卡 + 自己加补充"仍然算那张卡的人设，
+        不会因为补了一句要求就把归属打成手动。
+        """
+        try:
+            from ..persona_cards import all_cards
+
+            text = self.prompt.toPlainText().strip()
+            matched = next(
+                (
+                    card
+                    for card in all_cards(self.config.dir)
+                    if card.system_prompt and card.system_prompt.strip() == text
+                ),
+                None,
+            )
+            self.config.set(
+                "prompt_source", f"card:{matched.id}" if matched else "manual"
+            )
+        except Exception:
+            # 归属标记是提示性的：算不出来不应挡住保存
+            self.config.set("prompt_source", "manual")
+
+    def _composed_prompt(self) -> str:
+        """主体 + 补充 → 最终 System Prompt，并同步保存两段的原文。
+
+        只在这里合成：运行时仍只读 ``default_system_prompt``，读取方一行都不用改。
+        """
+        from ..persona_cards import compose_prompt
+
+        base = self.prompt.toPlainText().strip()
+        supplement = self.prompt_supplement.toPlainText().strip()
+        merge = bool(self.prompt_merge.isChecked())
+        self.config.set("prompt_base", base)
+        self.config.set("prompt_supplement", supplement)
+        self.config.set("prompt_merge", merge)
+        return compose_prompt(base, supplement, merge=merge)
+
     def _apply_persona_card(self) -> None:
         """把选中卡写进配置（人设 / 显示名 / 台词三件套），并落盘。"""
         card = self._current_persona_card()
@@ -928,14 +997,27 @@ class _AiSettingsPage(QWidget):
         if not targets and character:
             targets = {character: card.name}
         if card.system_prompt:
-            self.settings.default_system_prompt = card.system_prompt
+            # 主体换成人设，补充说明保留并继续叠加——应用卡不再把手写的补充冲掉。
+            from ..persona_cards import compose_prompt
+
+            supplement = str(self.config.get("prompt_supplement") or "").strip()
+            merge = bool(self.config.get("prompt_merge", True))
+            self.settings.default_system_prompt = compose_prompt(
+                card.system_prompt, supplement, merge=merge
+            )
             self.config.set_chat_settings(self.settings)
+            self.config.set("prompt_base", card.system_prompt)
+            self.prompt.setPlainText(card.system_prompt)
+            self.prompt_supplement.setPlainText(supplement)
         aliases = dict(self.config.get("character_aliases") or {})
         aliases.update(targets)
         self.config.set("character_aliases", aliases)
         if card.phrases:
             self.config.set("dialogue_mode", "custom")
             self.config.set("dialogue_phrases", {key: list(value) for key, value in card.phrases.items()})
+        # 人设来源标记：设置页与角色卡写的是同一个字段，标上归属才能解释"为什么
+        # 改了卡、System Prompt 也变了"（反向手改时这里会被改成 manual）。
+        self.config.set("prompt_source", f"card:{card.id}")
         saved = self.config.save()
         detail = [f"人设：{'已写入' if card.system_prompt else '未提供'}"]
         if targets:
@@ -953,18 +1035,32 @@ class _AiSettingsPage(QWidget):
     def _import_persona_card(self) -> None:
         from ..persona_cards import import_card
 
-        path, _ = QFileDialog.getOpenFileName(self, "导入角色卡", "", "角色卡 (*.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "导入角色卡",
+            "",
+            "角色卡 (*.json *.md *.markdown *.txt);;JSON 卡 (*.json);;Markdown (*.md *.markdown *.txt)",
+        )
         if not path:
             return
         card = import_card(self.config.dir, Path(path))
         if card is None:
-            QMessageBox.warning(self, "角色卡", "这个 JSON 不是有效的角色卡（至少需要 id 与 name）。")
+            QMessageBox.warning(
+                self,
+                "角色卡",
+                "这个文件读不出角色卡。\n"
+                "· JSON 卡至少需要 id 与 name；\n"
+                "· Markdown / TXT 需要正文（第一个 # 标题会当显示名）。",
+            )
             return
         self._reload_persona_cards()
         index = self.persona_card_combo.findData(card.id)
         if index >= 0:
             self.persona_card_combo.setCurrentIndex(index)
-        QMessageBox.information(self, "角色卡", f"已导入「{card.name}」。")
+        tip = f"已导入「{card.name}」。"
+        if not card.phrases:
+            tip += "\n（Markdown 卡只带人设，应用时不会改动现有台词。）"
+        QMessageBox.information(self, "角色卡", tip)
 
     def _export_persona_card(self) -> None:
         from ..persona_cards import export_card

@@ -87,6 +87,8 @@ MAX_TOTAL_CHARS = 4000
 MAX_ENTRY_CHARS = 500
 #: 注入段的硬字符上限（设计稿 §4：条列，带字符上限，超出按 hits/时间截）。
 INJECT_CHAR_LIMIT = 1200
+#: 「她对这条记忆的感受」上限：一句话，第一人称；只在记忆卡上展示，不进注入。
+MAX_FEELING_CHARS = 120
 
 #: 手动钉四前缀（中英文冒号都认；长前缀在前，避免被「记住：」抢匹配）。
 _REMEMBER_LAYERS = (
@@ -223,6 +225,16 @@ def _clean_keyword_list(value: Any) -> list[str]:
             break
     return cleaned
 
+
+
+def _clean_feeling(value: Any) -> str:
+    """把她写的感受归一成一句话：去换行/多余空白，截到上限。
+
+    不做「必须第一人称」的校验——审核提示词已经要求了，这里再挡一次只会把
+    写得不那么标准的感受整条丢掉（记忆本身还在，感受缺了反而更奇怪）。
+    """
+    text = " ".join(str(value or "").split())
+    return text[:MAX_FEELING_CHARS]
 
 
 def _keyword_jaccard(left: str, right: str) -> float:
@@ -682,6 +694,7 @@ class ChatMemory:
         source: str = "manual",
         *,
         layer: str | None = None,
+        feeling: str = "",
     ) -> tuple[dict[str, Any], bool] | None:
         """新增/刷新一条记忆（读→改→写整体跨进程互斥）。
 
@@ -702,6 +715,7 @@ class ChatMemory:
             return None
         explicit_layer = normalize_layer(layer_hint) if layer_hint else None
         keywords = extract_keywords(raw)
+        note = _clean_feeling(feeling)
         with self._lock:
             qlock = QLockFile(str(self._lock_file))
             if not self._try_file_lock(qlock):
@@ -724,6 +738,8 @@ class ChatMemory:
                         entry["keywords"] = (
                             _clean_keyword_list(entry.get("keywords")) or keywords
                         )
+                        if note:
+                            entry["feeling"] = note
                         if layer_of(entry) == "topic":
                             entry["last_hit_at"] = now
                             # L4：手动钉 = 恢复。``add`` 是唯一手动通道，所以这里
@@ -750,6 +766,8 @@ class ChatMemory:
                 }
                 if entry_layer == "topic":
                     entry["last_hit_at"] = now
+                if note:
+                    entry["feeling"] = note
                 entries.insert(0, entry)
                 self._enforce_limits(entries, protected=(entry,))
                 self._write(entries)
@@ -800,7 +818,8 @@ class ChatMemory:
                 normalize_layer(item.get("layer")) if item.get("layer") else None
             )
             keywords = _clean_keyword_list(item.get("keywords"))
-            normalized.append((op, text, explicit_layer, keywords))
+            feeling = _clean_feeling(item.get("feeling"))
+            normalized.append((op, text, explicit_layer, keywords, feeling))
         if not normalized:
             return False
         self.last_changes = []
@@ -819,7 +838,7 @@ class ChatMemory:
                 before = {str(e.get("id")): dict(e) for e in entries if e.get("id")}
                 manual = str(source or "").strip().lower() == "manual"
                 changed = False
-                for op, text, explicit_layer, keywords in normalized:
+                for op, text, explicit_layer, keywords, feeling in normalized:
                     found = next((e for e in entries if str(e.get("text", "")) == text), None)
                     if op == "FORGET":
                         if found is not None:
@@ -865,6 +884,8 @@ class ChatMemory:
                             or _clean_keyword_list(found.get("keywords"))
                             or extract_keywords(text)
                         )
+                        if feeling:
+                            found["feeling"] = feeling
                         if manual and layer_of(found) == "topic" and (
                                 restored or not is_archived(found, moment)):
                             found["last_hit_at"] = now
@@ -889,6 +910,8 @@ class ChatMemory:
                     }
                     if entry_layer == "topic":
                         entry["last_hit_at"] = now
+                    if feeling:
+                        entry["feeling"] = feeling
                     entries.insert(0, entry)
                     added.append(entry)
                     self.last_changes.append({"op": "ADD", "entry": dict(entry)})
