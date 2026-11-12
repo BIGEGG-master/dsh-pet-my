@@ -20,10 +20,26 @@ param(
     [string]$Description = '基于 MerZlin/dsh-pet-indesktop 的修改版：DSH 联动 + 可迭代开发脚本',
     [switch]$Private,
     [string]$Branch = 'main',
-    [string]$GitExe = ''
+    [string]$GitExe = '',
+    # 本地代理（如 Clash 的 http://127.0.0.1:7897）。留空则自动读系统代理设置；
+    # 国内网络直连 github.com:443 常常超时，但 api.github.com 可能仍然通——
+    # 于是会出现「仓库建好了、push 却连不上」，这里必须显式处理。
+    [string]$Proxy = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+
+if (-not $Proxy) {
+    try {
+        $ie = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+        if ($ie.ProxyEnable -eq 1 -and $ie.ProxyServer) {
+            $Proxy = if ($ie.ProxyServer -match '^https?://') { $ie.ProxyServer } else { "http://$($ie.ProxyServer)" }
+        }
+    } catch {
+        $Proxy = ''
+    }
+    if ($Proxy) { Write-Host "[push] 自动使用系统代理：$Proxy" }
+}
 
 if (-not $GitExe) {
     $GitExe = @('D:\MinGit\cmd\git.exe', 'C:\Program Files\Git\cmd\git.exe') | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -74,12 +90,19 @@ Set-Location $root
 $workBranch = (& $GitExe rev-parse --abbrev-ref HEAD).Trim()
 Write-Host "[push] 推送分支 $workBranch → $Branch（仓库约 114MB，按网速可能要几分钟）…"
 $remoteUrl = "https://x-access-token:$Token@github.com/$user/$Repo.git"
-& $GitExe push $remoteUrl "${workBranch}:refs/heads/$Branch" 2>&1 | ForEach-Object { $_ }
+$proxyArgs = @()
+if ($Proxy) { $proxyArgs = @('-c', "http.proxy=$Proxy", '-c', "https.proxy=$Proxy") }
+& $GitExe @proxyArgs push $remoteUrl "${workBranch}:refs/heads/$Branch" --progress 2>&1 | ForEach-Object { $_ }
 if ($LASTEXITCODE -ne 0) { throw "[push] git push 失败（exit=$LASTEXITCODE）" }
 
-# 推完把 origin 设成干净地址（不带 token）
+# 推完把 origin 设成干净地址（不带 token）；代理留在仓库级配置里，后续 fetch/push 不再踩墙
 & $GitExe remote remove origin 2>$null | Out-Null
 & $GitExe remote add origin "https://github.com/$user/$Repo.git"
+if ($Proxy) {
+    & $GitExe config http.proxy $Proxy | Out-Null
+    & $GitExe config https.proxy $Proxy | Out-Null
+}
+& $GitExe fetch origin 2>$null | Out-Null
 & $GitExe branch "--set-upstream-to=origin/$Branch" $workBranch 2>$null | Out-Null
 
 Write-Host ''
