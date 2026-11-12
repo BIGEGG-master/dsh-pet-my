@@ -1,0 +1,158 @@
+{
+  "template": "persona-phrases/v1",
+  "mode": "custom",
+  "name": "小肥鱼",
+  "description": "角色卡：小肥鱼（来自 dsh-pet 插件角色卡（pet-pack skins/feiyu-*））",
+  "phrases": {
+    "activity.default": [
+      "{name} 正在 {sessionName} 里忙「{label}」，本鱼帮你盯着。",
+      "唔，{name} 在 {sessionName} 干活（{label}），本鱼不吵你。",
+      "{name} 正在 {sessionName} 处理「{label}」，第 {step} 步了。"
+    ],
+    "activity.edit": [
+      "{name} 在 {sessionName} 里改「{label}」呢。",
+      "唔，{name} 正在动 {tool}，本鱼看着。",
+      "{name} 在 {sessionName} 改东西，改到第 {step} 步了。"
+    ],
+    "activity.read": [
+      "{name} 在 {sessionName} 里看「{label}」，本鱼也凑一眼。",
+      "唔，{name} 在拿 {tool} 翻东西。",
+      "{name} 正在 {sessionName} 读材料，第 {step} 步。"
+    ],
+    "activity.run": [
+      "{name} 在 {sessionName} 里跑「{label}」，本鱼躲远点。",
+      "{name} 把 {tool} 跑起来了。",
+      "{name} 正在执行，本鱼等结果。"
+    ],
+    "activity.search": [
+      "{name} 在 {sessionName} 里找「{label}」，本鱼也帮你翻。",
+      "唔，{name} 拿 {tool} 搜呢。",
+      "{name} 还在 {sessionName} 里找，没捞着就再捞一次。"
+    ],
+    "agent.attention": [
+      "{name} 要你瞄一眼。",
+      "唔，{name} 停下来等你了。",
+      "喂，{name} 那边要你做个决定。"
+    ],
+    "agent.error": [
+      "{name} 出错了，本鱼……本鱼也没辙。",
+      "唔，{name} 好像翻车了。",
+      "{name} 报错了，你看看嘛。"
+    ],
+    "agent.missing": [
+      "没找到 {name}，是不是没装好。",
+      "唔，本机看不到 {name}。",
+      "本鱼翻遍了，也没有 {name}。"
+    ],
+    "approval.generic": [
+      "{sessionName} 里 {name} 有件事等你点头。",
+      "唔，{name} 停在那等你拍板呢。",
+      "{name} 要你批准一下，本鱼不替你做主。"
+    ],
+    "approval.tool": [
+      "{sessionName} 里 {name} 想用 {toolName}，等你准。",
+      "唔，{name} 要动 {toolName} 了。",
+      "{name} 在申请「{label}」，用 {toolName}。"
+    ],
+    "balance.loading": [
+      "本鱼下去看看余额……",
+      "唔，等本鱼数一下钱。",
+      "正在看余额，别催。"
+    ],
+    "balance.result": [
+      "余额是 {text}，本鱼没偷吃。",
+      "唔，就剩 {text} 了。",
+      "查到啦：{text}"
+    ],
+    "bridge.install.failed": [
+      "{name} 的通信桥没接上：{detail}",
+      "唔，桥装失败了：{detail}",
+      "{name} 那边连不通，{detail}"
+    ],
+    "bridge.install.pending": [
+      "正在给 {name} 接桥，等一下下。",
+      "唔，桥在装了。",
+      "{name} 的通道马上好。"
+    ],
+    "bridge.install.success": [
+      "{name} 的桥接好了，本鱼能听到了。",
+      "唔，通了。",
+      "{name} 的通信桥装完啦。"
+    ],
+    "bridge.uninstall.failed": [
+      "{name} 的桥没拆干净，你手动看看吧。",
+      "唔，卸载留了点尾巴。",
+      "本鱼拆不动了，剩一点残留。"
+    ],
+    "bridge.unknown": [
+      "收到个本鱼不认识的事件（{event}），桥该更新了吧。",
+      "唔，{event} 是什么东西。",
+      "有个陌生信号 {event}，本鱼看不懂。"
+    ],
+    "done.attention": [
+      "{name} 停了，结果你确认一下。",
+      "唔，{name} 等你验收。",
+      "{name} 收工了，本鱼不抢功。"
+    ],
+    "done.success": [
+      "{name} 这轮干完了，本鱼饿了。",
+      "唔，完成了。",
+      "{name} 收尾啦。"
+    ],
+    "failure.generic": [
+      "{sessionName} 里 {name} 这轮失败了（{failureType}）。",
+      "唔，{name} 没跑通：{failureType}",
+      "{name} 扑街了，类型是 {failureType}。"
+    ],
+    "failure.retry": [
+      "{sessionName} 里 {name} 重试好几次也没成。",
+      "唔，{name} 试了又试。",
+      "{name} 还在重试，本鱼看着都累。"
+    ],
+    "failure.tool": [
+      "{sessionName} 里 {name} 的工具挂了。",
+      "唔，{name} 的工具没执行成功。",
+      "{name} 卡在工具那一步了。"
+    ],
+    "llm_error.api": [
+      "AI 那边没动静，本鱼也等。",
+      "唔，模型接口出问题了。",
+      "AI 服务抽了一下，等一下。"
+    ],
+    "model_access.many": [
+      "{sessionName} 里模型连续失败 {count} 次了，等等再试。",
+      "唔，{name} 被限流 {count} 次了。",
+      "连着 {count} 次没连上模型，先歇会儿。"
+    ],
+    "model_access.one": [
+      "{sessionName} 这次模型访问没过，等下重试。",
+      "唔，刚才那下没连上。",
+      "模型没回，本鱼再等等。"
+    ],
+    "question.empty": [
+      "{sessionName} 里 {name} 等你选。",
+      "唔，{name} 让你挑一下。",
+      "{name} 有问题等你答。"
+    ],
+    "question.many": [
+      "{sessionName} 里 {name} 有 {count} 个问题等你。",
+      "唔，{count} 个问题，慢慢答。",
+      "{name} 一口气问了 {count} 个。"
+    ],
+    "question.one": [
+      "{sessionName} 里 {name} 在问：{body}",
+      "唔，{name} 问你：{body}",
+      "{body} —— {name} 问的。"
+    ],
+    "start": [
+      "{name} 开工了，本鱼在旁边。",
+      "唔，{name} 开始了。",
+      "{name} 动起来了。"
+    ],
+    "thinking": [
+      "{name} 在想事情，本鱼不吵。",
+      "唔，思考中……",
+      "{name} 还在想，本鱼先眯一会儿。"
+    ]
+  }
+}
