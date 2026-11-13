@@ -2010,8 +2010,21 @@ class ModernSettingsDialog(QDialog):
                             "api_url",
                             "model",
                             "api_key",
-                            "system_prompt",
                             "connection_test",
+                        ),
+                    ),
+                    # 人设与角色卡：System Prompt 与角色卡是同一个字段的两条入口，
+                    # 必须挨着显示；补一行都要在这里 claim，否则会掉进「待分类」。
+                    (
+                        "人设与角色卡",
+                        claim(
+                            "system_prompt",
+                            "prompt_supplement",
+                            "prompt_merge",
+                            "persona_card",
+                            "persona_card_apply",
+                            "persona_card_import",
+                            "persona_card_export",
                         ),
                     ),
                     ("场景扮演", claim("roleplay_enabled", "roleplay_scene")),

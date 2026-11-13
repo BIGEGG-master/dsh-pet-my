@@ -294,7 +294,7 @@ class _AiSettingsPage(QWidget):
                 "persona_card", "角色卡",
                 "一份卡就是一个角色的完整身份：人设（System Prompt）、显示名、"
                 "以及全部事件台词。可以导入 JSON（persona-card/v1，带台词）"
-                "或 Markdown / TXT（只写人设，正文即 System Prompt）。"
+                "或 Markdown / 纯文本（只写人设，正文即 System Prompt）。"
                 "应用卡只换主体，上面写的补充说明会保留。",
                 self.persona_card_combo,
             ),
@@ -308,7 +308,7 @@ class _AiSettingsPage(QWidget):
             ),
             SettingRow(
                 "persona_card_import", "从文件导入",
-                "读 JSON（persona-card/v1）或 Markdown / TXT（# 标题当名字、正文当人设），"
+                "读 JSON（persona-card/v1）或 Markdown / 纯文本（# 标题当名字、正文当人设），"
                 "统一存到本机角色卡目录；同 id 会覆盖旧卡。",
                 self.persona_card_import_btn,
             ),
