@@ -1,0 +1,13 @@
+{
+  "id": "dsh_memory",
+  "label": "记忆",
+  "max_text": "8888",
+  "unit": "条",
+  "unit_full": "条记忆",
+  "source": "dsh-pet 插件记忆",
+  "detail": "DSH 桌宠插件的对话记忆与独立版桌宠记忆双向同步的条目总数",
+  "thresholds": [100000, 200000],
+  "provider": "provider.py",
+  "read": "read_count",
+  "format": "format_count"
+}
